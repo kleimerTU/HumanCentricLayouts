@@ -1,6 +1,6 @@
 # GRAINS: Generative Recursive Autoencoders for INdoor Scenes
 
-**Note:** The SUNCG data as well as some of the data created during the preprocessing in Matlab have not been added to the repository for now due to file size. These are not necessary for training and 2d-reconstruction of the generated scenes. The rest of this readme is taken dicrectly from thr GRAINS repository.
+**Note:** The SUNCG data as well as some of the data created during the preprocessing in Matlab have not been added to the repository for now due to file size. These are not necessary for training and 2d-reconstruction of the generated scenes. The rest of this readme is taken directly from the GRAINS repository.
 
 This is the code for our paper "GRAINS: Generative Recursive Autoencoders for INdoor Scenes".<br/>
 Project webpage [here](https://manyili12345.github.io/Publication/2018/GRAINS/index.html). 
