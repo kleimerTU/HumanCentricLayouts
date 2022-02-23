@@ -1,0 +1,10 @@
+# Ignore everything in this directory
+*
+# Except this file
+!.gitignore
+!invalid_models.txt
+!invalid_rooms.txt
+!valid_bedrooms.csv
+!valid_diningrooms.csv
+!valid_libraries.csv
+!valid_livingrooms.csv
