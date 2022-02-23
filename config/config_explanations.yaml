@@ -1,0 +1,38 @@
+general:
+    max_furniture: 20 # maximum number of furniture inside the room
+    res: 256 # resolution of the quantization
+    set_name: "3dfront_all" # name of the preprocessed data set ("3dfront_" + "bedrooms", "livingrooms", "diningrooms", "libraries" or "all")
+    suffix_name: "" # additional suffix for the file name under which the sequences are saved
+    order_switch: 1 # switches the order of object attributes. (0,1,2) are possible, 1 is recommended
+paths:
+    path_input_data: "./data/input" # path where the output data (converted sequences) is saved
+    path_output_data: "./data/output" # path where the output data (synthesized sequences, layouts, plots) is saved
+    path_3dfront_data: "./data/3dfront" # path to the preprocessed 3dfront data
+    path_trained_models: "./models" # path where the trained transformer models are saved
+network:
+    model_name: "3dfront_base" # name of the transformer model
+    use_ergo: False # if true, minimizes ergonomic loss during training. false for V0, V1, true for V2, V3
+    use_weight: False # if true, training samples are weighted by ergonomic score. false for V0, V2, true for V1, V3
+    do_validate: True # if true, performs validation after each training epoch
+    eval_ergo_loss: True # if true, ergonomic loss is evaluated even if it is not minimized during training
+    use_alt_loss: False # if true, replaces the ergonomic loss with a term that aims to reduce intersections between objects
+    epochs: 10 # number of epochs to train
+    lr: 0.00005 # learning rate
+    batch_size: 32 # batch size
+    n_layer: 12 # number of layers
+    n_head: 8 # number of attention heads
+    n_embd: 256 # embedding dimension
+    continue_train: False # if true, continues the training of a previous model
+    continue_epoch: -1 # epoch from which to continue the training. -1 uses the most recent epoch
+    init_model: null # initializes the model weights using a trained model (model_name). use null for a clean start
+    init_model_epoch: "best" # the epoch of the init_model to use. "best" uses the epoch with the lowest validation loss
+    device: "cuda" # determines whether the gpu should be used for network training. if cuda is not available, the cpu is used automatically
+synthesis:
+    n_scenes: 10 # number of scenes to synthesize
+    top_p: 0.9 # top-p nucleus sampling parameter 
+    top_k: 0 # top-k nucleus sampling parameter. if 0, top-p nucleus sampling is used
+    max_noncat: True # if true, the attributes (except category) of objects (except the room, windows and doors) are not sampled randomly, but the most likely value is used
+    max_windoor: False # if true, the attributes of windows and doors are also not sampled randomly
+    collision_check: True # if true, objects are only added to a scene if there is no large intersection with other objects
+    recon_epoch: "best" # which epoch of the model to use for scene synthesis. "best" uses the epoch with the lowest validation loss
+    house_name: "Base_Room" # the output name of the reconstructed rooms
