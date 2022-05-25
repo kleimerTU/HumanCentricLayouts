@@ -26,6 +26,12 @@ def main(argv):
         help="Paths to the configuration files"
     )
     
+    parser.add_argument(
+        "--with_floors",
+        action="store_true",
+        help="If true, loads the floors from the validation set for scenes conditioned on rooms"
+    )
+    
     args = parser.parse_args(argv)
     n_models = len(args.path_to_config)
     for i in range(n_models):
@@ -74,25 +80,30 @@ def main(argv):
         
         cat_supporter = ['table','desk','coffee_table','side_table','dresser','dressing_table','sideboard','shelving','stand','tv_stand']
         cat_supported = ['television','computer','indoor_lamp']
-
+        
+        if args.with_floors:
+          val_floors = pickle.load(open( path_input_data + set_name + "_data/" + set_name + "_val_floors" + suffix_name + ".pkl", "rb" ))
+          seq_indices = pickle.load(open( path_input_data + set_name + "_data/" + set_name + "_val_floors" + suffix_name + ".pkl", "rb" ))
+            
         nadded = 0
         for j in range(n_sequences):   
           print("Reconstructing scenes of model", config["network"]["model_name"], "-", str(j+1), "of" , str(n_sequences) , end="\r")
           if nadded == n_sequences:
             break
-          has_coll = False
           i = indices[j].item()
           full_house_name = house_name + str(nadded)
           room_seq = sequences[[i],:-1]
-          nodes, has_coll, scene_dict, furniture = add_furniture(room_seq, minvalue_dict, maxvalue_dict, dict_int2cat, dict_cat2model, dict_cat2dims, model2minp,
-            model2maxp, res=res, invalid_models=invalid_models, order_switch=0, add_all=True, collision_check=False)
+          nodes, has_coll, scene_dict, furniture = add_furniture(room_seq, minvalue_dict, maxvalue_dict, dict_int2cat, dict_cat2model, dict_cat2dims,
+            model2minp, model2maxp, res=res, invalid_models=invalid_models, order_switch=0, add_all=True, collision_check=False)
           
-          if has_coll:
-            continue
+          if args.with_floors:
+            augment = seq_indices[i] % 8
+            floor = val_floors[seq_indices[i]]
+            reconstruct_3d_scene(full_house_name, nodes, scene_dict, furniture, cat_supporter, cat_supported, path_output_data, 
+            floor_mesh=floor, augment=augment)
           else:
-            nadded = nadded + 1
-          
-          reconstruct_3d_scene(full_house_name, nodes, scene_dict, furniture, cat_supporter, cat_supported, path_output_data)
+            reconstruct_3d_scene(full_house_name, nodes, scene_dict, furniture, cat_supporter, cat_supported, path_output_data)
+          nadded = nadded + 1
           
 if __name__ == "__main__":
     main(sys.argv[1:])

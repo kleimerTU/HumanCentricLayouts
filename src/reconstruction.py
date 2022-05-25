@@ -3,7 +3,7 @@ import torch
 
 from src.main_functions import *
 
-def add_furniture(sequence, minvalue_dict, maxvalue_dict, dict_int2cat, dict_cat2model, dict_cat2dims, model2minp, model2maxp, res=256, nodes=None, scene_dict=None, invalid_models=[], add_all=False, collision_check=True, order_switch=1):
+def add_furniture(sequence, minvalue_dict, maxvalue_dict, dict_int2cat, dict_cat2model, dict_cat2dims, model2minp, model2maxp, res=256, nodes=None, scene_dict=None, invalid_models=[], add_all=False, collision_check=True, order_switch=1,augment=0):
   """
   Adds a furniture object into the scene, optionally checking for collisions
   """
@@ -18,8 +18,32 @@ def add_furniture(sequence, minvalue_dict, maxvalue_dict, dict_int2cat, dict_cat
   if torch.sum(valid_row) < 1:
     return nodes, True, scene_dict, None
   room_seq = room_seq[valid_row,:]
-  reconstructed = unquantize_sequence_grid(room_seq,minvalue_dict,maxvalue_dict,res)
+  reconstructed = unquantize_sequence(room_seq,minvalue_dict,maxvalue_dict,res)
   furniture = sequence_to_furniture(reconstructed,dict_int2cat)
+  
+  rnd_rot = augment
+  if rnd_rot > 0:
+    for furn in furniture:
+      for r in range(rnd_rot % 4):
+        furn.pos = torch.as_tensor([furn.pos[1],-furn.pos[0]])
+        furn.rot = furn.rot - 0.5*np.pi
+      if furn.rot <= -np.pi:
+        furn.rot = furn.rot + 2*np.pi
+    for r in range(rnd_rot % 4):
+      furniture[0].dim = furniture[0].dim[[1,0]]
+    furniture[0].rot = torch.zeros(1,)
+  if rnd_rot > 3:
+    for furn in furniture:
+      furn.pos = torch.as_tensor([-furn.pos[0],furn.pos[1]])
+      front_old = furn.world_front()
+      front_new = torch.as_tensor([-front_old[0],front_old[1]])
+      dot = torch.sum(front_old * front_new)
+      det = front_old[0] * front_new[1] -  front_old[1] * front_new[0]
+      furn.rot = furn.rot + torch.atan2(det, dot)
+      if furn.rot > np.pi:
+        furn.rot = furn.rot - 2*np.pi
+    furniture[0].rot = torch.zeros(1,)
+  
   if scene_dict == None or len(scene_dict.keys()) == 0:
     scene_dict = {}
     scene_dict["bb_in_scene"] = []
@@ -49,7 +73,7 @@ def add_furniture(sequence, minvalue_dict, maxvalue_dict, dict_int2cat, dict_cat
     with open(path_3dfront_data + "invalid_models.txt") as file:
       invalid_model_lines = file.readlines()
       invalid_models.extend([line.rstrip() for line in invalid_model_lines])
-  collision = False
+  has_coll = False
   if add_all:
     to_add = range(len(furniture))
   else:
@@ -110,11 +134,12 @@ def add_furniture(sequence, minvalue_dict, maxvalue_dict, dict_int2cat, dict_cat
             model_height = (1.0*room_height/2.0)
           furn_pos_y = room_height - model_height - (room_height * 0.1)
           if not orthographic_mode:
-            pos_vec = (furn.pos - 0.5*furniture[0].dim) / torch.linalg.vector_norm((furn.pos - 0.5*furniture[0].dim))
+            pos_vec = (furn.pos - furniture[0].pos) / torch.linalg.vector_norm((furn.pos - furniture[0].pos))
             t_sign = -torch.sign(torch.dot(pos_vec,furn_dir))
-            if t_sign > -1.0:
+            if t_sign >= 0.0:
               t_sign = 1.0
-            furn.pos = furn.pos + furn_dir * t_sign * 1.0 * furn.dim[1]
+            else:
+              t_sign = -1.0
 
         if best_model_index > 0: # don't scale if best fit collides with scene
           scale_w = 1.0
@@ -159,14 +184,19 @@ def add_furniture(sequence, minvalue_dict, maxvalue_dict, dict_int2cat, dict_cat
 
         collision = False
         if furn.coarse_category == 'door' or furn.coarse_category == 'window':
-          min_dist = torch.min(torch.abs(torch.as_tensor([furn.pos[0],furn.pos[1],furn.pos[0]-furniture[0].dim[0],furn.pos[1]-furniture[0].dim[1]])))
-          if min_dist >= 2*furn.dim[1]: # check if door or window not close to wall
+          room_corners = torch.stack([scene_dict["room_min"],scene_dict["room_max"]])
+          extension = 0.2
+          furn.dim[1] = furn.dim[1] + extension
+          inter_area = get_intersection_area2d(furn.bbox(), room_corners[:,[0,2]])
+          furn_area = furn.dim[0] * furn.dim[1]
+          furn.dim[1] = furn.dim[1] - extension
+          if collision_check and (inter_area <= 1e-5 or inter_area >= (furn_area-1e-5)): # check if door or window not close to wall
             collision = True
         else:
           room_corners = torch.stack([scene_dict["room_min"],scene_dict["room_max"]])
           model_area = (model_bb[1,0]-model_bb[0,0]) * (model_bb[1,2]-model_bb[0,2])
           inter_area = get_intersection_area(model_bb, room_corners)
-          if collision_check and model_area * 0.95 > inter_area:
+          if collision_check and model_area * 0.8 > inter_area:
             collision = True
         if not collision:
           bb_in_scene = scene_dict["bb_in_scene"]
@@ -244,9 +274,9 @@ def add_furniture(sequence, minvalue_dict, maxvalue_dict, dict_int2cat, dict_cat
       scene_dict["furn_transforms"].append(torch.eye(4).flatten().tolist())
       scene_dict["room_min"] = room_min
       scene_dict["room_max"] = room_max
-  return nodes, collision, scene_dict, furniture
+  return nodes, has_coll, scene_dict, furniture
 
-def reconstruct_3d_scene(full_house_name, nodes, scene_dict, furniture, cat_supporter, cat_supported, path_output_data):
+def reconstruct_3d_scene(full_house_name, nodes, scene_dict, furniture, cat_supporter, cat_supported, path_output_data, floor_mesh=None, augment=0):
   """
   Reconstructs a 3D scene from a given 2D layout
   """
@@ -332,12 +362,37 @@ def reconstruct_3d_scene(full_house_name, nodes, scene_dict, furniture, cat_supp
   f_floor = [1,4,3,2]
   f_walls = [[1,2,6,5],[2,3,7,6],[3,4,8,7],[4,1,5,8]]
 
-  floor_string = "mtllib fr_0rm_0f.mtl\n" + "o Floor#0_1\n"
-  for k in range(len(v_floor)):
-    floor_string = floor_string + "v " + str(v_floor[k][0].item()) + " " + str(v_floor[k][1].item()) + " " + str(v_floor[k][2].item()) + "\n"
-  floor_string = floor_string + "vt 0.0 0.0\nvt 1.0 0.0\nvt 1.0 1.0\nvt 0.0 1.0\n"
-  floor_string = floor_string + "usemtl material_0\n"
-  floor_string = floor_string + "f " + str(f_floor[0]) + "/1 " + str(f_floor[1]) + "/4 " + str(f_floor[2]) + "/3 " + str(f_floor[3]) + "/2\n"
+  if floor_mesh == None:
+    floor_string = "mtllib fr_0rm_0f.mtl\n" + "o Floor#0_1\n"
+    for k in range(len(v_floor)):
+      floor_string = floor_string + "v " + str(v_floor[k][0].item()) + " " + str(v_floor[k][1].item()) + " " + str(v_floor[k][2].item()) + "\n"
+    floor_string = floor_string + "vt 0.0 0.0\nvt 1.0 0.0\nvt 1.0 1.0\nvt 0.0 1.0\n"
+    floor_string = floor_string + "usemtl material_0\n"
+    floor_string = floor_string + "f " + str(f_floor[0]) + "/1 " + str(f_floor[1]) + "/4 " + str(f_floor[2]) + "/3 " + str(f_floor[3]) + "/2\n"
+  else:
+    v_floor = floor_mesh["v"]
+    uv_room = floor_mesh["uv"]
+    f_room = floor_mesh["f"]
+    for k in range(augment % 4):
+      v_floor = np.stack([v_floor[:,2],v_floor[:,1],-v_floor[:,0]],axis=1)
+    if augment > 3:
+      v_floor[:,0] = -v_floor[:,0]
+
+    v_tri = v_floor[f_room[0,:3],:]
+    e0 = v_tri[2,:] - v_tri[0,:]
+    e1 = v_tri[1,:] - v_tri[0,:]
+    nv = np.cross(e0,e1)
+    if nv[1] < 0.0:
+      f_room[:,[1,2]] = f_room[:,[2,1]]
+    
+    floor_string = "mtllib fr_0rm_0f.mtl\n" + "o Floor#0_1\n"
+    for k in range(len(v_floor)):
+      floor_string = floor_string + "v " + str(v_floor[k,0].item()) + " " + str(v_floor[k,1].item()) + " " + str(v_floor[k,2].item()) + "\n"
+    for k in range(len(uv_room)):
+      floor_string = floor_string + "vt " + str(uv_room[k,0].item()) + " " + str(uv_room[k,1].item()) + "\n"
+    floor_string = floor_string + "usemtl material_0\n"
+    for k in range(len(f_room)):
+      floor_string = floor_string + "f " + str(f_room[k,0]+1) + "/" + str(f_room[k,0]+1) + " " + str(f_room[k,2]+1) + "/" + str(f_room[k,2]+1) + " " + str(f_room[k,1]+1) + "/" + str(f_room[k,1]+1) + "\n"
 
   walls_string = "mtllib fr_0rm_0w.mtl\n"
   for w in range(len(f_walls)):

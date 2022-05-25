@@ -14,11 +14,11 @@ network:
     use_ergo: False
     use_weight: False
     do_validate: True
-    eval_ergo_loss: True
+    eval_ergo_loss: False
     use_alt_loss: False
-    epochs: 10
-    lr: 0.00005
-    batch_size: 32
+    epochs: 100
+    lr: 0.0001
+    batch_size: 64
     n_layer: 12
     n_head: 8
     n_embd: 256
@@ -26,6 +26,7 @@ network:
     continue_epoch: -1
     init_model: null
     init_model_epoch: "best"
+    pred_sigma: 1.0
     device: "cuda"
 synthesis:
     n_scenes: 10

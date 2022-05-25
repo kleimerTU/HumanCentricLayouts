@@ -27,6 +27,11 @@ def main(argv):
   )
   
   parser.add_argument(
+      "path_3dfront_maps",
+      help="Path to the 3DFront room masks (see Readme for details)"
+  )
+  
+  parser.add_argument(
       "--num_room_plots",
       default=0,
       type=int,
@@ -42,6 +47,7 @@ def main(argv):
     
     path_3dfront_data = config["paths"]["path_3dfront_data"] + "/"
     path_input_data = config["paths"]["path_input_data"] + "/"
+    path_3dfront_maps = args.path_3dfront_maps + "/"
     set_name = config["general"]["set_name"]
     suffix_name = config["general"]["suffix_name"]
     max_furniture = config["general"]["max_furniture"]
@@ -61,11 +67,24 @@ def main(argv):
     n_val = 0
     train_furniture = []
     val_furniture = []
+    train_masks = []
+    val_masks = []
+    train_square = []
+    val_square = []
+    train_floor = []
+    val_floor = []
     if set_name != "3dfront_all":
       furniture = pickle.load(open( path_3dfront_data + set_name + ".pkl", "rb" ))
       scene_info = pickle.load(open( path_3dfront_data + set_name + "_info.pkl", "rb" ))
       for i in range(len(furniture)):
-        if not scene_info["is_square"][i]:
+        house_name = scene_info["house_name"][i].split(".")[0]
+        folder_name = path_3dfront_maps + house_name + "_" + scene_info["room_name"][i]
+        if os.path.isdir(folder_name):
+          room_mask_img = Image.open(folder_name + "/room_mask.png").convert("RGB")
+          room_mask =  np.asarray(room_mask_img).astype(np.float32) / np.float32(255)
+          room_mask = room_mask[:, :, 0:1]
+          room_mask = np.transpose(room_mask, (2, 0, 1)).astype(bool)
+        else:
           continue
         scene_furniture = filter_furniture(furniture[i],category_valid,centering=True)
         for furn in scene_furniture:
@@ -74,114 +93,32 @@ def main(argv):
           furn.rot = furn.rot.float()
         if scene_info["is_train"][i]:
           train_furniture.append(scene_furniture)
+          train_masks.append(room_mask)
+          train_square.append(scene_info["is_square"][i])
+          train_floor.append(scene_info["floor_mesh"][i])
         elif scene_info["is_val"][i]:
           if set_name == '3dfront_bedrooms':
             val_furniture.append(scene_furniture)
+            val_masks.append(room_mask)
+            val_square.append(scene_info["is_square"][i])
+            val_floor.append(scene_info["floor_mesh"][i])
           else:
             train_furniture.append(scene_furniture)
+            train_masks.append(room_mask)
+            train_square.append(scene_info["is_square"][i])
+            train_floor.append(scene_info["floor_mesh"][i])
         else:
           val_furniture.append(scene_furniture)
+          val_masks.append(room_mask)
+          val_square.append(scene_info["is_square"][i])
+          val_floor.append(scene_info["floor_mesh"][i])
       furniture = []
-    else: # combine all room types into one set
-      # bedrooms
-      furniture = pickle.load(open( path_3dfront_data + "3dfront_bedrooms" + ".pkl", "rb" ))
-      scene_info = pickle.load(open( path_3dfront_data + "3dfront_bedrooms" + "_info.pkl", "rb" ))
-      for i in range(len(furniture)):
-        if not scene_info["is_square"][i]:
-          continue
-        scene_furniture = filter_furniture(furniture[i],category_valid,centering=True)
-        for furn in scene_furniture:
-          furn.pos = furn.pos.float()
-          furn.dim = abs(furn.dim.float())
-          furn.rot = furn.rot.float()
-        if scene_info["is_train"][i]:
-          train_furniture.append(scene_furniture)
-        else:
-          val_furniture.append(scene_furniture)
-      furniture = []
-      # libraries
-      furniture = pickle.load(open( path_3dfront_data + "3dfront_libraries" + ".pkl", "rb" ))
-      scene_info = pickle.load(open( path_3dfront_data + "3dfront_libraries" + "_info.pkl", "rb" ))
-      for i in range(len(furniture)):
-        if not scene_info["is_square"][i]:
-          continue
-        scene_furniture = filter_furniture(furniture[i],category_valid,centering=True)
-        for furn in scene_furniture:
-          furn.pos = furn.pos.float()
-          furn.dim = abs(furn.dim.float())
-          furn.rot = furn.rot.float()
-        if scene_info["is_train"][i] or scene_info["is_val"][i]:
-          train_furniture.append(scene_furniture)
-        else:
-          val_furniture.append(scene_furniture)
-      furniture = []
-      # living and dining rooms - make sure to keep train and val set separate
-      set_name1 = "3dfront_livingrooms"
-      set_name2 = "3dfront_diningrooms"
-      scene_info1 = pickle.load(open( path_3dfront_data + set_name1 + "_info.pkl", "rb" ))
-      scene_info2 = pickle.load(open( path_3dfront_data + set_name2 + "_info.pkl", "rb" ))
-      furniture1 = pickle.load(open( path_3dfront_data + set_name1 + ".pkl", "rb" ))
-      furniture2 = pickle.load(open( path_3dfront_data + set_name2 + ".pkl", "rb" ))
-      only_train_dict = {}
-      only_testval_dict = {}
-      added_list = []
-      for i in range(len(scene_info1["room_name"])):
-        if scene_info1["is_train"][i] or scene_info1["is_val"][i]:
-          only_train_dict[scene_info1["room_name"][i]] = True
-          only_testval_dict[scene_info1["room_name"][i]] = False
-        else:
-          only_testval_dict[scene_info1["room_name"][i]] = True
-          only_train_dict[scene_info1["room_name"][i]] = False
-      for i in range(len(scene_info2["room_name"])):
-        if scene_info2["is_train"][i] or scene_info2["is_val"][i]:
-          if scene_info2["room_name"][i] in only_testval_dict.keys() and only_testval_dict[scene_info2["room_name"][i]]:
-            only_train_dict[scene_info2["room_name"][i]] = False
-            only_testval_dict[scene_info2["room_name"][i]] = False
-          else:
-            only_train_dict[scene_info2["room_name"][i]] = True
-            only_testval_dict[scene_info2["room_name"][i]] = False
-        else:
-          if scene_info2["room_name"][i] in only_train_dict.keys() and only_train_dict[scene_info2["room_name"][i]]:
-            only_train_dict[scene_info2["room_name"][i]] = False
-            only_testval_dict[scene_info2["room_name"][i]] = False
-          else:
-            only_testval_dict[scene_info2["room_name"][i]] = True
-            only_train_dict[scene_info2["room_name"][i]] = False
-      for i in range(len(furniture1)):
-        if not scene_info1["is_square"][i]:
-          continue
-        if scene_info1["room_name"][i] in added_list:
-          continue
-        scene_furniture = filter_furniture(furniture1[i],category_valid,centering=True)
-        for furn in scene_furniture:
-          furn.pos = furn.pos.float()
-          furn.dim = abs(furn.dim.float())
-          furn.rot = furn.rot.float()
-        if only_train_dict[scene_info1["room_name"][i]]:
-          train_furniture.append(scene_furniture)
-          added_list.append(scene_info1["room_name"][i])
-        elif only_testval_dict[scene_info1["room_name"][i]]:
-          val_furniture.append(scene_furniture)
-          added_list.append(scene_info1["room_name"][i])
-      for i in range(len(furniture2)):
-        if not scene_info2["is_square"][i]:
-          continue
-        if scene_info2["room_name"][i] in added_list:
-          continue
-        scene_furniture = filter_furniture(furniture2[i],category_valid,centering=True)
-        for furn in scene_furniture:
-          furn.pos = furn.pos.float()
-          furn.dim = abs(furn.dim.float())
-          furn.rot = furn.rot.float()
-        if only_train_dict[scene_info2["room_name"][i]]:
-          train_furniture.append(scene_furniture)
-          added_list.append(scene_info2["room_name"][i])
-        elif only_testval_dict[scene_info2["room_name"][i]]:
-          val_furniture.append(scene_furniture)
-          added_list.append(scene_info2["room_name"][i])
-      furniture1 = []
-      furniture2 = []
+    else: 
+      raise NotImplementedError('Room masks are currently only supported for individual room types')
 
+    valid_masks = []
+    valid_square = []
+    valid_floor = []
     for i in range(len(train_furniture)):
       print("Processing training set -", i+1, "of", len(train_furniture), "rooms processed",end="\r")
       furniture = train_furniture[i]
@@ -209,10 +146,7 @@ def main(argv):
               door_bb = furn.bbox()
               is_inside = torch.logical_and(door_bb[0,:] > (room_bb[0,:] + 0.05), door_bb[1,:] < (room_bb[1,:] - 0.05))
               is_inside = torch.sum(is_inside,0) > 1
-              if is_inside:
-                doors_valid = False
-              else:
-                valid_furniture.append(furn)
+              valid_furniture.append(furn)
             else:
               valid_furniture.append(furn)
           if keep_rooms_with_inside_doors:
@@ -227,8 +161,14 @@ def main(argv):
             room_seq[:,[1,2]] = room_seq[:,[1,2]] - room_pos
             room_seq[0,5] = 0
             train_sequences.append(room_seq)
+            mask = torch.as_tensor(train_masks[i].copy())
+            valid_masks.append(mask)
+            valid_square.append(train_square[i])
+            valid_floor.append(train_floor[i])
             # augment dataset
+            room_mask = train_masks[i]
             for r in range(4):
+              room_mask = np.transpose(room_mask,(0,2,1))[:,:,::-1] # rotate
               for furn in furniture:
                 furn.pos = torch.as_tensor([-furn.pos[1],furn.pos[0]])
                 furn.rot = furn.rot + 0.5*np.pi
@@ -242,6 +182,10 @@ def main(argv):
                 room_seq[:,[1,2]] = room_seq[:,[1,2]] - room_pos
                 room_seq[0,5] = 0
                 train_sequences.append(room_seq)
+                mask = torch.as_tensor(room_mask.copy())
+                valid_masks.append(mask)
+                valid_square.append(train_square[i])
+                valid_floor.append(train_floor[i])
             # mirror and repeat
             for furn in furniture:
               furn.pos = torch.as_tensor([-furn.pos[0],furn.pos[1]])
@@ -254,7 +198,9 @@ def main(argv):
                 furn.rot = furn.rot - 2*np.pi
             furniture[0].dim = furniture[0].dim[[1,0]]
             furniture[0].rot = torch.zeros(1,)
+            room_mask = room_mask[:,:,::-1] # mirror
             for r in range(4):
+              room_mask = np.transpose(room_mask,(0,2,1))[:,:,::-1] # rotate
               for furn in furniture:
                 furn.pos = torch.as_tensor([-furn.pos[1],furn.pos[0]])
                 furn.rot = furn.rot + 0.5*np.pi
@@ -267,12 +213,22 @@ def main(argv):
               room_seq[:,[1,2]] = room_seq[:,[1,2]] - room_pos
               room_seq[0,5] = 0
               train_sequences.append(room_seq)
+              mask = torch.as_tensor(room_mask.copy())
+              valid_masks.append(mask)
+              valid_square.append(train_square[i])
+              valid_floor.append(train_floor[i])
       n_train = n_train + 1
     if not os.path.exists(path_input_data + set_name + "_data/"):
       os.mkdir(path_input_data + set_name + "_data/")
     pickle.dump(train_sequences, open(path_input_data + set_name + "_data/" + set_name + "_train_unquantized" + suffix_name + ".pkl", "wb"))
+    pickle.dump(valid_masks, open(path_input_data + set_name + "_data/" + set_name + "_train_masks" + suffix_name + ".pkl", "wb"))
+    pickle.dump(valid_square, open(path_input_data + set_name + "_data/" + set_name + "_train_square" + suffix_name + ".pkl", "wb"))
+    pickle.dump(valid_floor, open(path_input_data + set_name + "_data/" + set_name + "_train_floor" + suffix_name + ".pkl", "wb"))
     print()
-
+    
+    valid_masks = []
+    valid_square = []
+    valid_floor = []
     for i in range(len(val_furniture)):
       print("Processing validation set -", i+1, "of", len(val_furniture), "rooms processed",end="\r")
       furniture = val_furniture[i]
@@ -300,10 +256,7 @@ def main(argv):
               door_bb = furn.bbox()
               is_inside = torch.logical_and(door_bb[0,:] > (room_bb[0,:] + 0.05), door_bb[1,:] < (room_bb[1,:] - 0.05))
               is_inside = torch.sum(is_inside,0) > 1
-              if is_inside:
-                doors_valid = False
-              else:
-                valid_furniture.append(furn)
+              valid_furniture.append(furn)
             else:
               valid_furniture.append(furn)
           if keep_rooms_with_inside_doors:
@@ -317,8 +270,14 @@ def main(argv):
               room_seq[:,[1,2]] = room_seq[:,[1,2]] - room_pos
               room_seq[0,5] = 0
               val_sequences.append(room_seq)
-               # augment dataset
+              mask = torch.as_tensor(val_masks[i].copy())
+              valid_masks.append(mask)
+              valid_square.append(val_square[i])
+              valid_floor.append(val_floor[i])
+              # augment dataset
+              room_mask = val_masks[i]
               for r in range(4):
+                room_mask = np.transpose(room_mask,(0,2,1))[:,:,::-1] # rotate
                 for furn in furniture:
                   furn.pos = torch.as_tensor([-furn.pos[1],furn.pos[0]])
                   furn.rot = furn.rot + 0.5*np.pi
@@ -332,6 +291,10 @@ def main(argv):
                   room_seq[:,[1,2]] = room_seq[:,[1,2]] - room_pos
                   room_seq[0,5] = 0
                   val_sequences.append(room_seq)
+                  mask = torch.as_tensor(room_mask.copy())
+                  valid_masks.append(mask)
+                  valid_square.append(val_square[i])
+                  valid_floor.append(val_floor[i])
               # mirror and repeat
               for furn in furniture:
                 furn.pos = torch.as_tensor([-furn.pos[0],furn.pos[1]])
@@ -344,7 +307,9 @@ def main(argv):
                   furn.rot = furn.rot - 2*np.pi
               furniture[0].dim = furniture[0].dim[[1,0]]
               furniture[0].rot = torch.zeros(1,)
+              room_mask = room_mask[:,:,::-1] # mirror
               for r in range(4):
+                room_mask = np.transpose(room_mask,(0,2,1))[:,:,::-1] # rotate
                 for furn in furniture:
                   furn.pos = torch.as_tensor([-furn.pos[1],furn.pos[0]])
                   furn.rot = furn.rot + 0.5*np.pi
@@ -357,8 +322,15 @@ def main(argv):
                 room_seq[:,[1,2]] = room_seq[:,[1,2]] - room_pos
                 room_seq[0,5] = 0
                 val_sequences.append(room_seq)
+                mask = torch.as_tensor(room_mask.copy())
+                valid_masks.append(mask)
+                valid_square.append(val_square[i])
+                valid_floor.append(val_floor[i])
       n_val = n_val + 1
     pickle.dump(val_sequences, open(path_input_data + set_name + "_data/" + set_name + "_val_unquantized" + suffix_name + ".pkl", "wb"))
+    pickle.dump(valid_masks, open(path_input_data + set_name + "_data/" + set_name + "_val_masks" + suffix_name + ".pkl", "wb"))
+    pickle.dump(valid_square, open(path_input_data + set_name + "_data/" + set_name + "_val_square" + suffix_name + ".pkl", "wb"))
+    pickle.dump(valid_floor, open(path_input_data + set_name + "_data/" + set_name + "_val_floor" + suffix_name + ".pkl", "wb"))
     print()
 
     # for each category, get the range of possible values

@@ -3,7 +3,7 @@ general:
     res: 256 # resolution of the quantization
     set_name: "3dfront_all" # name of the preprocessed data set ("3dfront_" + "bedrooms", "livingrooms", "diningrooms", "libraries" or "all")
     suffix_name: "" # additional suffix for the file name under which the sequences are saved
-    order_switch: 1 # switches the order of object attributes. (0,1,2) are possible, 1 is recommended
+    order_switch: 2 # switches the order of object attributes. (0,1,2) are possible, 2 is recommended
 paths:
     path_input_data: "./data/input" # path where the output data (converted sequences) is saved
     path_output_data: "./data/output" # path where the output data (synthesized sequences, layouts, plots) is saved
@@ -11,14 +11,14 @@ paths:
     path_trained_models: "./models" # path where the trained transformer models are saved
 network:
     model_name: "3dfront_base" # name of the transformer model
-    use_ergo: False # if true, minimizes ergonomic loss during training. false for V0, V1, true for V2, V3
-    use_weight: False # if true, training samples are weighted by ergonomic score. false for V0, V2, true for V1, V3
+    use_ergo: False # if true, minimizes ergonomic loss during training. false for baselinea and weight-only, true for loss-only and full model
+    use_weight: False # if true, training samples are weighted by ergonomic score. false for baseline and loss-only, true for weight-only and full model
     do_validate: True # if true, performs validation after each training epoch
-    eval_ergo_loss: True # if true, ergonomic loss is evaluated even if it is not minimized during training
+    eval_ergo_loss: False # if true, ergonomic loss is evaluated even if it is not minimized during training
     use_alt_loss: False # if true, replaces the ergonomic loss with a term that aims to reduce intersections between objects
-    epochs: 10 # number of epochs to train
-    lr: 0.00005 # learning rate
-    batch_size: 32 # batch size
+    epochs: 100 # number of epochs to train
+    lr: 0.0001 # learning rate
+    batch_size: 64 # batch size
     n_layer: 12 # number of layers
     n_head: 8 # number of attention heads
     n_embd: 256 # embedding dimension
@@ -26,6 +26,7 @@ network:
     continue_epoch: -1 # epoch from which to continue the training. -1 uses the most recent epoch
     init_model: null # initializes the model weights using a trained model (model_name). use null for a clean start
     init_model_epoch: "best" # the epoch of the init_model to use. "best" uses the epoch with the lowest validation loss
+    pred_sigma: 1.0 # determines the size of the neighborhood when predicting a token for ergonomic score evaluation
     device: "cuda" # determines whether the gpu should be used for network training. if cuda is not available, the cpu is used automatically
 synthesis:
     n_scenes: 10 # number of scenes to synthesize

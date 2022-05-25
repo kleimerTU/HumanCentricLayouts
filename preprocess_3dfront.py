@@ -146,6 +146,7 @@ def main(argv):
     scene_info["is_test"] = []
     scene_info["is_val"] = []
     scene_info["is_square"] = []
+    scene_info["floor_mesh"] = []
 
     cat_count = {}
     device = "cpu"
@@ -196,7 +197,6 @@ def main(argv):
       for j in range(len(data["scene"]["room"])):
         augment_rolls = torch.rand((2,))
         furn_list = []
-        v_room = np.empty((0,3))
         converted_furniture = []
         room = data["scene"]["room"][j]
         furn_count = 0
@@ -225,12 +225,21 @@ def main(argv):
 
         # add room to the furniture list
         is_square = True
+        v_room = np.empty((0,3))
+        uv_room = np.empty((0,2))
+        f_room = np.empty((0,3),dtype=int)
         for child in room["children"]:
           if child["instanceid"].startswith("mesh"):
             if "Floor" in id2mesh[child["ref"]]["type"]:
               xyz = np.asarray(id2mesh[child["ref"]]["xyz"],dtype=float)
               xyz = np.reshape(xyz,(-1,3))
+              uv = np.asarray(id2mesh[child["ref"]]["uv"],dtype=float)
+              uv = np.reshape(uv,(-1,2))
+              faces = np.asarray(id2mesh[child["ref"]]["faces"],dtype=int)
+              faces = np.reshape(faces,(-1,3))
               v_room = np.concatenate((v_room,xyz),axis=0)
+              uv_room = np.concatenate((uv_room,uv),axis=0)
+              f_room = np.concatenate((f_room,faces + f_room.shape[0]),axis=0)
         if v_room.shape[0] > 0:
           bbox_min = np.min(v_room,axis=0)
           bbox_max = np.max(v_room,axis=0)
@@ -285,7 +294,7 @@ def main(argv):
               bb_sorted, _ = torch.sort(bb,descending=True) # order of bb dimensions is not always correct
               furn_bbox = [bb_sorted[0],1.25,bb_sorted[1]]
             else:
-              furn_bbox = [0.75,1.25,0.05]
+              furn_bbox = [0.75,1.25,0.2]
           else:
             furn_bbox = model_bboxes[furn["jid"]]
             if len(furn_bbox) == 1:
@@ -341,7 +350,7 @@ def main(argv):
               if category not in cat_count.keys():
                 cat_count[category] = 0
               cat_count[category] += 1
-            if new_furn.coarse_category == "stand" and augment_rolls[1] >= 0.5:
+            if new_furn.coarse_category in ["stand","side_table"] and augment_rolls[1] >= 0.5:
               tv_furn = Furniture()
               tv_furn.fine_category = "indoor_lamp"
               tv_furn.final_category = "indoor_lamp"
@@ -380,9 +389,9 @@ def main(argv):
             min_dist, min_index = torch.min(dist,axis=0)
             bb = torch.as_tensor(door_dimensions)[min_index,[0,2]]
             bb_sorted, _ = torch.sort(bb,descending=True) # order of bb dimensions is not always correct
-            furn_bbox = [bb_sorted[0],1.25,bb_sorted[1]]
+            furn_bbox = [bb_sorted[0],2.0,bb_sorted[1]]
           else:
-            furn_bbox = [0.75,1.25,0.05]
+            furn_bbox = [0.75,2.0,0.05]
           furn_scale = [1.0,1.0,1.0]
           new_furn.dim = torch.as_tensor(furn_bbox,device=device)[[0,2]] * torch.as_tensor(furn_scale,device=device)[[0,2]]
           rot = furn["rot"]
@@ -421,6 +430,7 @@ def main(argv):
           scene_info["is_val"].append(split_type[room["instanceid"]] == "val")
           scene_info["is_test"].append(split_type[room["instanceid"]] == "test")
           scene_info["is_square"].append(is_square)
+          scene_info["floor_mesh"].append({"v":v_room,"uv":uv_room,"f":f_room})
       
     pickle.dump(per_room_furniture, open(path_3dfront_data + "3dfront_" + room_type + ".pkl", "wb" ))
     pickle.dump(scene_info, open(path_3dfront_data + "3dfront_" + room_type + "_info.pkl", "wb" ))

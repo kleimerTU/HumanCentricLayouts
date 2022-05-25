@@ -3,22 +3,22 @@ general:
     res: 256
     set_name: "3dfront_bedrooms"
     suffix_name: ""
-    order_switch: 1
+    order_switch: 2
 paths:
     path_input_data: "./data/input"
     path_output_data: "./data/output"
     path_3dfront_data: "./data/3dfront"
     path_trained_models: "./models"
 network:
-    model_name: "3dfront_bed_V0"
-    use_ergo: False
-    use_weight: False
+    model_name: "3dfront_bed_full"
+    use_ergo: True
+    use_weight: True
     do_validate: True
-    eval_ergo_loss: False
+    eval_ergo_loss: True
     use_alt_loss: False
-    epochs: 10
+    epochs: 150
     lr: 0.0001
-    batch_size: 32
+    batch_size: 64
     n_layer: 12
     n_head: 8
     n_embd: 256
@@ -26,6 +26,7 @@ network:
     continue_epoch: -1
     init_model: null
     init_model_epoch: "best"
+    pred_sigma: 1.0
     device: "cuda"
 synthesis:
     n_scenes: 10
@@ -35,4 +36,4 @@ synthesis:
     max_windoor: False
     collision_check: True
     recon_epoch: "best"
-    house_name: "Bed_V0_Room"
+    house_name: "Bed_Full_Room"

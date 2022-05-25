@@ -74,6 +74,8 @@ class GPT2ModelCustom(GPT2Model):
         output_hidden_states=None,
         return_dict=None,
         index_ids=None,
+        room_encodings=None,
+        room_mode="replace_angle_after",
     ):
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -153,6 +155,17 @@ class GPT2ModelCustom(GPT2Model):
 
         if inputs_embeds is None:
             inputs_embeds = self.wte(input_ids)
+        if room_encodings is not None and "before" in room_mode:
+            if "add" in room_mode:
+                if "all" in room_mode:
+                    inputs_embeds[:,1:6,:] += room_encodings
+                else: # only angle
+                    inputs_embeds[:,1,:] += room_encodings
+            else: # replace
+                if "all" in room_mode:
+                    inputs_embeds[:,1:6,:] = room_encodings
+                else: # only angle
+                    inputs_embeds[:,1,:] = room_encodings
         position_embeds = self.wpe(position_ids)
         hidden_states = inputs_embeds + position_embeds
         if index_ids is not None:
@@ -162,6 +175,17 @@ class GPT2ModelCustom(GPT2Model):
         if token_type_ids is not None:
             token_type_embeds = self.wte(token_type_ids)
             hidden_states = hidden_states + token_type_embeds
+        if room_encodings is not None and "before" not in room_mode:
+            if "add" in room_mode:
+                if "all" in room_mode:
+                    hidden_states[:,1:6,:] += room_encodings
+                else: # only angle
+                    hidden_states[:,1,:] += room_encodings
+            else: # replace
+                if "all" in room_mode:
+                    hidden_states[:,1:6,:] = room_encodings
+                else: # only angle
+                    hidden_states[:,1,:] = room_encodings
 
         hidden_states = self.drop(hidden_states)
 
@@ -310,6 +334,8 @@ class GPT2LMHeadModelCustom(GPT2LMHeadModel):
         attention_mask = kwargs.get("attention_mask", None)
         position_ids = kwargs.get("position_ids", None)
         index_ids = kwargs.get("index_ids", None)
+        room_encodings = kwargs.get("room_encodings", None) 
+        room_mode = kwargs.get("room_mode","replace_angle_after")
 
         if attention_mask is not None and position_ids is None:
             # create position_ids on the fly for batch generation
@@ -335,6 +361,8 @@ class GPT2LMHeadModelCustom(GPT2LMHeadModel):
             "index_ids": index_ids,
             "attention_mask": attention_mask,
             "token_type_ids": token_type_ids,
+            "room_encodings": room_encodings,
+            "room_mode": room_mode,
         }
 
     def forward(
@@ -354,6 +382,8 @@ class GPT2LMHeadModelCustom(GPT2LMHeadModel):
         output_hidden_states=None,
         return_dict=None,
         index_ids=None,
+        room_encodings=None,
+        room_mode="replace_angle_after",
     ):
         r"""
         labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
@@ -378,6 +408,8 @@ class GPT2LMHeadModelCustom(GPT2LMHeadModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             index_ids=index_ids,
+            room_encodings=room_encodings,
+            room_mode=room_mode,
         )
         hidden_states = transformer_outputs[0]
 

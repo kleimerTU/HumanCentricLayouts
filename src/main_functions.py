@@ -24,65 +24,6 @@ def gaussian1d(mu,sigma,res,device='cpu'):
   x = torch.linspace(0, res-1, res,device=device).view(1,-1)
   return torch.exp(-0.5*((x-mu)/sigma)**2) #* 1/(s*np.sqrt(2*np.pi)) 
 
-def glare_par(pos,light,grid,all_pairs=True):
-  """
-  Evaluates the glare ergonomic score
-  """
-  if all_pairs:
-    v = torch.unsqueeze(grid,1)-torch.unsqueeze(pos,2)
-  else:
-    v = (grid - pos).unsqueeze(2)
-  v = v / torch.linalg.norm(v,dim=-1,keepdim=True)
-  lp = torch.unsqueeze(light,1)-torch.unsqueeze(pos,2)
-  lp = lp / torch.linalg.norm(lp,dim=-1,keepdim=True)
-  vdotlp = torch.unsqueeze(v,2) * torch.unsqueeze(lp,3)
-  E = ((torch.sum(vdotlp,-1)+1.0)/2.0)**4
-  sm = torch.nn.Softmax(2)
-  E = torch.sum(E*sm(E*10.0),2)
-  return E
-
-def lighting_par(pos,light,grid,all_pairs=True):
-  """
-  Evaluates the lighting ergonomic score
-  """
-  if all_pairs:
-    v = torch.unsqueeze(grid,1)-torch.unsqueeze(pos,2)
-    v = v / torch.linalg.norm(v,dim=-1,keepdim=True)
-    lg = torch.unsqueeze(grid,1)-torch.unsqueeze(light,2)
-    lg = lg / torch.linalg.norm(lg,dim=-1,keepdim=True)
-    vdotlg = torch.unsqueeze(v,2) * torch.unsqueeze(lg,1)
-  else:
-    v = (grid - pos).unsqueeze(2)
-    v = v / torch.linalg.norm(v,dim=-1,keepdim=True)
-    lg = torch.unsqueeze(grid,2)-torch.unsqueeze(light,1)
-    lg = lg / torch.linalg.norm(lg,dim=-1,keepdim=True)
-    vdotlg = torch.unsqueeze(v,2) * torch.unsqueeze(lg,3)
-  E = ((torch.sum(vdotlg,-1)+1.0)/2.0)
-  E = (1.0-E)**4
-  sm = torch.nn.Softmin(2)
-  E = torch.sum(E*sm(E*10.0),2)
-  return E
-
-def visibility_par(pos,v,grid):
-  """
-  Evaluates the visibility ergonomic score
-  """
-  pg = torch.unsqueeze(grid,1)-torch.unsqueeze(pos,2)
-  pg = pg / torch.linalg.norm(pg,dim=-1,keepdim=True)
-  v = v / torch.linalg.norm(v,dim=-1,keepdim=True)
-  vdotpg = torch.unsqueeze(v,2) * pg#torch.unsqueeze(pg,1)
-  E = 1.0-((torch.sum(vdotpg,-1)+1.0)/2.0)**2
-  return E
-
-def reach_par(pos,grid,easy_reach=0.8,dropoff=15.0):
-  """
-  Evaluates the reach ergonomic score
-  """
-  pg = torch.unsqueeze(grid,1)-torch.unsqueeze(pos,2)
-  pg = torch.linalg.norm(pg,dim=-1,keepdim=False)
-  E = 1.0 / (1.0 + torch.exp(-dropoff * (pg - easy_reach)))
-  return E
-
 class Furniture():
   """
   Represents a furniture object
@@ -153,7 +94,7 @@ class Furniture():
 
   def bbox(self):
     """
-    Returns the bottom left and top right oriented bounding box corners of the furniture object
+    Returns the bottom left and top right axis-aligned bounding box corners of the furniture object
     """
     front = self.world_front()
     side = torch.as_tensor([-front[1].clone(),front[0].clone()],device=front.device) * 0.5 * self.dim[0]
@@ -222,13 +163,16 @@ def center_furniture(furniture):
     f.pos = f.pos - center
   return furniture
 
-def get_predictions(labels, logits,minvalue_dict,maxvalue_dict,res,device='cpu'):
+def get_predictions(labels, logits,minvalue_dict,maxvalue_dict,res,sigma=8.0,sample_random=False,device='cpu'):
   """
   Computes the interpolated value of a predicted token based on its neighborhood
   """
   logits = F.softmax(logits,-1)
-  pred_ind = torch.argmax(logits,-1)
-  gauss_weights = gaussian1d(pred_ind,8.0,res,device=device)
+  if sample_random:
+    pred_ind = torch.multinomial(logits, num_samples=1)
+  else:
+    pred_ind = torch.argmax(logits,-1)
+  gauss_weights = gaussian1d(pred_ind,sigma,res,device=device)
   row_ind = torch.linspace(0,logits.size(0)-1,logits.size(0),dtype=torch.long,device=device)
   col_ind = torch.linspace(0,logits.size(1)-2,logits.size(1)-1,dtype=torch.long,device=device)
   interp_val = torch.sum(col_ind * logits[row_ind,:-1] * gauss_weights,1)
@@ -238,347 +182,6 @@ def get_predictions(labels, logits,minvalue_dict,maxvalue_dict,res,device='cpu')
   label_mat = labels[:-1].view(-1,6).clone()
   return interp_val, label_mat
 
-def score_read_book(labels, minvalue_dict,maxvalue_dict,res,dict_cat2fun,use_log=True,device='cpu'):
-  """
-  Evaluates the Read Book activity for the given layout
-  """
-  label_mat = labels.clone()
-  ind_posdimrot = [1,2,5]
-  cat_light = dict_cat2fun["light"]
-  cat_light_glare = dict_cat2fun["glare"]
-  cat_sit = dict_cat2fun["sit"]
-  cat_sitlight = torch.concat([cat_light,cat_sit],dim=1)
-  is_sitlight = torch.sum(torch.eq(cat_sitlight,label_mat[:,[0]]),-1) > 0
-  is_valid = torch.sum(label_mat > (res-0.9),1) < 1.0
-  label_mat = label_mat[torch.logical_and(is_sitlight, is_valid),:]
-  
-  is_sit = torch.sum(torch.eq(cat_sit,label_mat[:,[0]]),-1) > 0
-  is_light = torch.sum(torch.eq(cat_light,label_mat[:,[0]]),-1) > 0
-  is_light_glare = torch.sum(torch.eq(cat_light_glare,label_mat[:,[0]]),-1) > 0
-  if torch.sum(is_sit) < 1 or torch.sum(is_light) < 1:
-    return -2.0*torch.ones(1,).to(device)
-
-  pos_lights = label_mat[is_light,1:3].unsqueeze(0)
-  pos_lights_glare = label_mat[is_light_glare,1:3].unsqueeze(0)
-  pos_sit = label_mat[is_sit,1:3].unsqueeze(0)
-  dim_sit = label_mat[is_sit,3:5].unsqueeze(0)
-  rot_sit = label_mat[is_sit,5:6].unsqueeze(0)
-  dir_sit = torch.cat([-torch.sin(rot_sit),torch.cos(rot_sit)],-1)
-  pos_sit = pos_sit - dir_sit * 0.25 * dim_sit
-  pos_books = pos_sit + dir_sit * 0.2
-  epsilon = torch.exp(torch.as_tensor([-5])).to(device)
-  e_glare = glare_par(pos_sit,pos_lights_glare,pos_books,all_pairs=False)
-  e_lighting = lighting_par(pos_sit,pos_lights,pos_books,all_pairs=False)
-  if use_log:
-    e_glare = -torch.log(1.0 + epsilon - e_glare)
-    e_lighting = -torch.log(1.0 + epsilon - e_lighting)
-  e_total = 0.5 * e_glare + 0.5 * e_lighting
-  e_total = e_total.flatten(start_dim=-2)
-  return torch.sum(e_total * F.softmin(e_total*10.0,-1),-1)
-
-def eval_read_book(interp_val, label_mat,minvalue_dict,maxvalue_dict,res,dict_cat2fun,use_log=True,device='cpu'):  
-  """
-  Evaluates the Read Book activity for each predicted token value
-  """
-  ind_posdimrot = [1,2,5]
-  cat_light = dict_cat2fun["light"]
-  cat_light_glare = dict_cat2fun["glare"]
-  cat_sit = dict_cat2fun["sit"]
-  cat_sitlight = torch.concat([cat_light,cat_sit],dim=1)
-  is_sitlight = torch.sum(torch.eq(cat_sitlight,label_mat[:,[0]]),-1) > 0
-  interp_val = interp_val[is_sitlight,:]
-  label_mat = label_mat[is_sitlight,:]
-
-  is_sit = torch.sum(torch.eq(cat_sit,label_mat[:,[0]]),-1) > 0
-  is_light = torch.sum(torch.eq(cat_light,label_mat[:,[0]]),-1) > 0
-  is_light_glare = torch.sum(torch.eq(cat_light_glare,label_mat[:,[0]]),-1) > 0
-  if torch.sum(is_sit) < 1 or torch.sum(is_light) < 1:
-    return -2.0*torch.ones(1,).to(device)
-  interp_val = interp_val[:,ind_posdimrot]
-  value_mat = label_mat[:,ind_posdimrot].clone()
-
-  # replace gt values with predicted values
-  n_rows = interp_val.size(0)
-  n_cols = interp_val.size(1)
-  n_elem = n_rows * n_cols
-  value_mat = value_mat.repeat(n_elem,1,1)
-  elem_ind = torch.linspace(0,n_elem-1,n_elem,dtype=torch.long,device=device)
-  col_ind = torch.linspace(0,n_cols-1,n_cols,dtype=torch.long,device=device).repeat_interleave(n_rows)
-  row_ind = torch.linspace(0,n_rows-1,n_rows,dtype=torch.long,device=device).repeat(n_cols)
-  value_mat[elem_ind,row_ind,col_ind] = interp_val[row_ind,col_ind]
-  
-  pos_lights = value_mat[:,is_light,0:2]
-  pos_lights_glare = value_mat[:,is_light_glare,0:2]
-  pos_sit = value_mat[:,is_sit,0:2]
-  dim_sit = label_mat[is_sit,3:5].view(1,-1,2)
-  rot_sit = value_mat[:,is_sit,2:3]
-  dir_sit = torch.cat([-torch.sin(rot_sit),torch.cos(rot_sit)],-1)
-  pos_sit = pos_sit - dir_sit * 0.25 * dim_sit
-  pos_books = pos_sit + dir_sit * 0.2
-  epsilon = torch.exp(torch.as_tensor([-5])).to(device)
-  e_glare = glare_par(pos_sit,pos_lights_glare,pos_books,all_pairs=False)
-  e_lighting = lighting_par(pos_sit,pos_lights,pos_books,all_pairs=False)
-  if use_log:
-    e_glare = -torch.log(1.0 + epsilon - e_glare)
-    e_lighting = -torch.log(1.0 + epsilon - e_lighting)
-  e_total = 0.5 * e_glare + 0.5 * e_lighting
-  e_total = e_total.flatten(start_dim=-2)
-  return torch.sum(e_total * F.softmin(e_total*10.0,-1),-1)
-
-def score_watch_tv(labels, minvalue_dict,maxvalue_dict,res,dict_cat2fun,use_log=True,device='cpu'):
-  """
-  Evaluates the Watch TV activity for the given layout
-  """
-  label_mat = labels.clone()
-  ind_posdimrot = [1,2,5]
-  cat_light_glare = dict_cat2fun["glare"]
-  cat_sit = dict_cat2fun["sit"]
-  cat_tv = dict_cat2fun["tv"]
-  cat_sitlighttv = torch.concat([cat_light_glare,cat_sit,cat_tv],dim=1)
-  is_sitlighttv = torch.sum(torch.eq(cat_sitlighttv,label_mat[:,[0]]),-1) > 0
-  is_valid = torch.sum(label_mat > (res-0.9),1) < 1.0
-  label_mat = label_mat[torch.logical_and(is_sitlighttv, is_valid),:]
-
-  is_tv = torch.sum(torch.eq(cat_tv,label_mat[:,[0]]),-1) > 0
-  is_sit = torch.sum(torch.eq(cat_sit,label_mat[:,[0]]),-1) > 0
-  is_light_glare = torch.sum(torch.eq(cat_light_glare,label_mat[:,[0]]),-1) > 0
-  if torch.sum(is_sit) < 1 or torch.sum(is_tv) < 1 or torch.sum(is_light_glare) < 1:
-    return -2.0*torch.ones(1,).to(device)
-  
-  pos_tv = label_mat[is_tv,1:3].unsqueeze(0)
-  pos_lights_glare = label_mat[is_light_glare,1:3].unsqueeze(0)
-  pos_sit = label_mat[is_sit,1:3].unsqueeze(0)
-  dim_sit = label_mat[is_sit,3:5].unsqueeze(0)
-  rot_sit = label_mat[is_sit,5:6].unsqueeze(0)
-  dir_sit = torch.cat([-torch.sin(rot_sit),torch.cos(rot_sit)],-1)
-  epsilon = torch.exp(torch.as_tensor([-5])).to(device)
-  e_glare = glare_par(pos_sit,pos_lights_glare,pos_tv,all_pairs=True)
-  e_vis = visibility_par(pos_sit,dir_sit,pos_tv)
-  if use_log:
-    e_glare = -torch.log(1.0 + epsilon - e_glare)
-    e_vis = -torch.log(1.0 + epsilon - e_vis)
-  e_total = 0.5 * e_glare + 0.5 * e_vis
-  e_total = e_total.flatten(start_dim=-2)
-  return torch.sum(e_total * F.softmin(e_total*10.0,-1),-1)
-
-def eval_watch_tv(interp_val, label_mat,minvalue_dict,maxvalue_dict,res,dict_cat2fun,use_log=True,device='cpu'):
-  """
-  Evaluates the Watch TV activity for each predicted token value
-  """
-  ind_posdimrot = [1,2,5]
-  cat_light_glare = dict_cat2fun["glare"]
-  cat_sit = dict_cat2fun["sit"]
-  cat_tv = dict_cat2fun["tv"]
-  cat_sitlighttv = torch.concat([cat_light_glare,cat_sit,cat_tv],dim=1)
-  is_sitlighttv = torch.sum(torch.eq(cat_sitlighttv,label_mat[:,[0]]),-1) > 0
-  interp_val = interp_val[is_sitlighttv,:]
-  label_mat = label_mat[is_sitlighttv,:]
-
-  is_sit = torch.sum(torch.eq(cat_sit,label_mat[:,[0]]),-1) > 0
-  is_light_glare = torch.sum(torch.eq(cat_light_glare,label_mat[:,[0]]),-1) > 0
-  is_tv = torch.sum(torch.eq(cat_tv,label_mat[:,[0]]),-1) > 0
-  if torch.sum(is_sit) < 1 or torch.sum(is_tv) < 1 or torch.sum(is_light_glare) < 1:
-    return -2.0*torch.ones(1,).to(device)
-  interp_val = interp_val[:,ind_posdimrot]
-  value_mat = label_mat[:,ind_posdimrot].clone()
-
-  # replace gt values with predicted values
-  n_rows = interp_val.size(0)
-  n_cols = interp_val.size(1)
-  n_elem = n_rows * n_cols
-  value_mat = value_mat.repeat(n_elem,1,1)
-  elem_ind = torch.linspace(0,n_elem-1,n_elem,dtype=torch.long,device=device)
-  col_ind = torch.linspace(0,n_cols-1,n_cols,dtype=torch.long,device=device).repeat_interleave(n_rows)
-  row_ind = torch.linspace(0,n_rows-1,n_rows,dtype=torch.long,device=device).repeat(n_cols)
-  value_mat[elem_ind,row_ind,col_ind] = interp_val[row_ind,col_ind]
-  
-  pos_tv = value_mat[:,is_tv,0:2]
-  pos_lights_glare = value_mat[:,is_light_glare,0:2]
-  pos_sit = value_mat[:,is_sit,0:2]
-  rot_sit = value_mat[:,is_sit,2:3]
-  dir_sit = torch.cat([-torch.sin(rot_sit),torch.cos(rot_sit)],-1)
-  epsilon = torch.exp(torch.as_tensor([-5])).to(device)
-  e_glare = glare_par(pos_sit,pos_lights_glare,pos_tv,all_pairs=True)
-  e_vis = visibility_par(pos_sit,dir_sit,pos_tv)
-  if use_log:
-    e_glare = -torch.log(1.0 + epsilon - e_glare)
-    e_vis = -torch.log(1.0 + epsilon - e_vis)
-  e_total = 0.5 * e_glare + 0.5 * e_vis
-  e_total = e_total.flatten(start_dim=-2)
-  return torch.sum(e_total * F.softmin(e_total*10.0,-1),-1)
-
-def score_use_computer(labels, minvalue_dict,maxvalue_dict,res,dict_cat2fun,use_log=True,device='cpu'):
-  """
-  Evaluates the Use Computer activity for the given layout
-  """
-  label_mat = labels.clone()
-  ind_posdimrot = [1,2,5]
-  cat_light_glare = dict_cat2fun["glare"]
-  cat_sit = dict_cat2fun["sit"]
-  cat_comp = dict_cat2fun["computer"]
-  cat_sitlightcomp = torch.concat([cat_light_glare,cat_sit,cat_comp],dim=1)
-  is_sitlightcomp = torch.sum(torch.eq(cat_sitlightcomp,label_mat[:,[0]]),-1) > 0
-  is_valid = torch.sum(label_mat > (res-0.9),1) < 1.0
-  label_mat = label_mat[torch.logical_and(is_sitlightcomp, is_valid),:]
-
-  is_comp = torch.sum(torch.eq(cat_comp,label_mat[:,[0]]),-1) > 0
-  is_sit = torch.sum(torch.eq(cat_sit,label_mat[:,[0]]),-1) > 0
-  is_light_glare = torch.sum(torch.eq(cat_light_glare,label_mat[:,[0]]),-1) > 0
-  if torch.sum(is_sit) < 1 or torch.sum(is_comp) < 1 or torch.sum(is_light_glare) < 1:
-    return -2.0*torch.ones(1,).to(device)
-  
-  pos_comp = label_mat[is_comp,1:3].unsqueeze(0)
-  pos_lights_glare = label_mat[is_light_glare,1:3].unsqueeze(0)
-  pos_sit = label_mat[is_sit,1:3].unsqueeze(0)
-  dim_sit = label_mat[is_sit,3:5].unsqueeze(0)
-  rot_sit = label_mat[is_sit,5:6].unsqueeze(0)
-  dir_sit = torch.cat([-torch.sin(rot_sit),torch.cos(rot_sit)],-1)
-  epsilon = torch.exp(torch.as_tensor([-5])).to(device)
-  e_glare = glare_par(pos_sit,pos_lights_glare,pos_comp,all_pairs=True)
-  e_vis = visibility_par(pos_sit,dir_sit,pos_comp)
-  e_reach = reach_par(pos_sit,pos_comp)
-  if use_log:
-    e_glare = -torch.log(1.0 + epsilon - e_glare)
-    e_vis = -torch.log(1.0 + epsilon - e_vis)
-    e_reach = -torch.log(1.0 + epsilon - e_reach)
-  e_total = e_glare / 3.0 + e_vis / 3.0 + e_reach / 3.0
-  e_total = e_total.flatten(start_dim=-2)
-  return torch.sum(e_total * F.softmin(e_total*10.0,-1),-1)
-
-def eval_use_computer(interp_val, label_mat,minvalue_dict,maxvalue_dict,res,dict_cat2fun,use_log=True,device='cpu'):  
-  """
-  Evaluates the Use Computer activity for each predicted token value
-  """
-  ind_posdimrot = [1,2,5]
-  cat_light_glare = dict_cat2fun["glare"]
-  cat_sit = dict_cat2fun["sit"]
-  cat_comp = dict_cat2fun["computer"]
-  cat_sitlightcomp = torch.concat([cat_light_glare,cat_sit,cat_comp],dim=1)
-  is_sitlightcomp = torch.sum(torch.eq(cat_sitlightcomp,label_mat[:,[0]]),-1) > 0
-  interp_val = interp_val[is_sitlightcomp,:]
-  label_mat = label_mat[is_sitlightcomp,:]
-
-  is_sit = torch.sum(torch.eq(cat_sit,label_mat[:,[0]]),-1) > 0
-  is_light_glare = torch.sum(torch.eq(cat_light_glare,label_mat[:,[0]]),-1) > 0
-  is_comp = torch.sum(torch.eq(cat_comp,label_mat[:,[0]]),-1) > 0
-  if torch.sum(is_sit) < 1 or torch.sum(is_comp) < 1 or torch.sum(is_light_glare) < 1:
-    return -2.0*torch.ones(1,).to(device)
-  interp_val = interp_val[:,ind_posdimrot]
-  value_mat = label_mat[:,ind_posdimrot].clone()
-
-  # replace gt values with predicted values
-  n_rows = interp_val.size(0)
-  n_cols = interp_val.size(1)
-  n_elem = n_rows * n_cols
-  value_mat = value_mat.repeat(n_elem,1,1)
-  elem_ind = torch.linspace(0,n_elem-1,n_elem,dtype=torch.long,device=device)
-  col_ind = torch.linspace(0,n_cols-1,n_cols,dtype=torch.long,device=device).repeat_interleave(n_rows)
-  row_ind = torch.linspace(0,n_rows-1,n_rows,dtype=torch.long,device=device).repeat(n_cols)
-  value_mat[elem_ind,row_ind,col_ind] = interp_val[row_ind,col_ind]
-  
-  pos_comp = value_mat[:,is_comp,0:2]
-  pos_lights_glare = value_mat[:,is_light_glare,0:2]
-  pos_sit = value_mat[:,is_sit,0:2]
-  rot_sit = value_mat[:,is_sit,2:3]
-  dir_sit = torch.cat([-torch.sin(rot_sit),torch.cos(rot_sit)],-1)
-  epsilon = torch.exp(torch.as_tensor([-5])).to(device)
-  e_glare = glare_par(pos_sit,pos_lights_glare,pos_comp,all_pairs=True)
-  e_vis = visibility_par(pos_sit,dir_sit,pos_comp)
-  e_reach = reach_par(pos_sit,pos_comp)
-  if use_log:
-    e_glare = -torch.log(1.0 + epsilon - e_glare)
-    e_vis = -torch.log(1.0 + epsilon - e_vis)
-    e_reach = -torch.log(1.0 + epsilon - e_reach)
-  e_total = e_glare / 3.0 + e_vis / 3.0 + e_reach / 3.0
-  e_total = e_total.flatten(start_dim=-2)
-  return torch.sum(e_total * F.softmin(e_total*10.0,-1),-1)
-
-def score_work_table(labels, minvalue_dict,maxvalue_dict,res,dict_cat2fun,use_log=True,device='cpu'):
-  """
-  Evaluates the Work at Table activity for the given layout
-  """
-  label_mat = labels.clone()
-  ind_posdimrot = [1,2,5]
-  cat_light = dict_cat2fun["light"]
-  cat_sit = dict_cat2fun["sit"]
-  cat_table = dict_cat2fun["table"]
-  cat_sitlighttable = torch.concat([cat_light,cat_sit,cat_table],dim=1)
-  is_sitlighttable = torch.sum(torch.eq(cat_sitlighttable,label_mat[:,[0]]),-1) > 0
-  is_valid = torch.sum(label_mat > (res-0.9),1) < 1.0
-  label_mat = label_mat[torch.logical_and(is_sitlighttable, is_valid),:]
-
-  is_table = torch.sum(torch.eq(cat_table,label_mat[:,[0]]),-1) > 0
-  is_sit = torch.sum(torch.eq(cat_sit,label_mat[:,[0]]),-1) > 0
-  is_light = torch.sum(torch.eq(cat_light,label_mat[:,[0]]),-1) > 0
-  if torch.sum(is_sit) < 1 or torch.sum(is_table) < 1 or torch.sum(is_light) < 1:
-    return -2.0*torch.ones(1,).to(device)
-  
-  pos_table = label_mat[is_table,1:3].unsqueeze(0)
-  pos_lights = label_mat[is_light,1:3].unsqueeze(0)
-  pos_sit = label_mat[is_sit,1:3].unsqueeze(0)
-  dim_sit = label_mat[is_sit,3:5].unsqueeze(0)
-  rot_sit = label_mat[is_sit,5:6].unsqueeze(0)
-  dir_sit = torch.cat([-torch.sin(rot_sit),torch.cos(rot_sit)],-1)
-  epsilon = torch.exp(torch.as_tensor([-5])).to(device)
-  e_lighting = lighting_par(pos_sit,pos_lights,pos_table)
-  e_vis = visibility_par(pos_sit,dir_sit,pos_table)
-  e_reach = reach_par(pos_sit,pos_table, easy_reach=1.0)
-  if use_log:
-    e_lighting = -torch.log(1.0 + epsilon - e_lighting)
-    e_reach = -torch.log(1.0 + epsilon - e_reach)
-    e_vis = -torch.log(1.0 + epsilon - e_vis)
-  e_total = e_lighting / 3.0 + e_vis / 3.0 + e_reach / 3.0
-  e_total = e_total.flatten(start_dim=-2)
-  return torch.sum(e_total * F.softmin(e_total*10.0,-1),-1)
-
-def eval_work_table(interp_val, label_mat,minvalue_dict,maxvalue_dict,res,dict_cat2fun,use_log=True,device='cpu'):
-  """
-  Evaluates the Work at Table activity for each predicted token value
-  """
-  ind_posdimrot = [1,2,5]
-  cat_light = dict_cat2fun["light"]
-  cat_sit = dict_cat2fun["sit"]
-  cat_table = dict_cat2fun["table"]
-  cat_sitlighttable = torch.concat([cat_light,cat_sit,cat_table],dim=1)
-  is_sitlighttable = torch.sum(torch.eq(cat_sitlighttable,label_mat[:,[0]]),-1) > 0
-  is_valid = torch.sum(interp_val > (res-0.9),1) + torch.sum(label_mat > (res-0.9),1) < 1.0
-  interp_val = interp_val[is_sitlighttable,:]
-  label_mat = label_mat[is_sitlighttable,:]
-
-  is_sit = torch.sum(torch.eq(cat_sit,label_mat[:,[0]]),-1) > 0
-  is_light = torch.sum(torch.eq(cat_light,label_mat[:,[0]]),-1) > 0
-  is_table = torch.sum(torch.eq(cat_table,label_mat[:,[0]]),-1) > 0
-  if torch.sum(is_sit) < 1 or torch.sum(is_table) < 1 or torch.sum(is_light) < 1:
-    return -2.0*torch.ones(1,).to(device)
-  interp_val = interp_val[:,ind_posdimrot]
-  value_mat = label_mat[:,ind_posdimrot].clone()
-
-  # replace gt values with predicted values
-  n_rows = interp_val.size(0)
-  n_cols = interp_val.size(1)
-  n_elem = n_rows * n_cols
-  value_mat = value_mat.repeat(n_elem,1,1)
-  elem_ind = torch.linspace(0,n_elem-1,n_elem,dtype=torch.long,device=device)
-  col_ind = torch.linspace(0,n_cols-1,n_cols,dtype=torch.long,device=device).repeat_interleave(n_rows)
-  row_ind = torch.linspace(0,n_rows-1,n_rows,dtype=torch.long,device=device).repeat(n_cols)
-  value_mat[elem_ind,row_ind,col_ind] = interp_val[row_ind,col_ind]
-  
-  pos_table = value_mat[:,is_table,0:2]
-  pos_lights = value_mat[:,is_light,0:2]
-  pos_sit = value_mat[:,is_sit,0:2]
-  rot_sit = value_mat[:,is_sit,2:3]
-  dir_sit = torch.cat([-torch.sin(rot_sit),torch.cos(rot_sit)],-1)
-  epsilon = torch.exp(torch.as_tensor([-5])).to(device)
-  e_lighting = lighting_par(pos_sit,pos_lights,pos_table)
-  e_vis = visibility_par(pos_sit,dir_sit,pos_table)
-  e_reach = reach_par(pos_sit,pos_table, easy_reach=1.0)
-  if use_log:
-    e_lighting = -torch.log(1.0 + epsilon - e_lighting)
-    e_reach = -torch.log(1.0 + epsilon - e_reach)
-    e_vis = -torch.log(1.0 + epsilon - e_vis)
-  e_total = e_lighting / 3.0 + e_vis / 3.0 + e_reach / 3.0
-  e_total = e_total.flatten(start_dim=-2)
-  return torch.sum(e_total * F.softmin(e_total*10.0,-1),-1)
 
 def create_sequence(furniture,dict_cat2int,detailed=False,keep_room_dims=False, res=256):
   """
@@ -604,10 +207,10 @@ def create_sequence(furniture,dict_cat2int,detailed=False,keep_room_dims=False, 
   is_vertical = torch.logical_and(val_seq[is_door,5] % (np.pi) < (2*np.pi/res), val_seq[is_door,5] % (np.pi) > (-2*np.pi/res))
   is_horizontal = torch.logical_and(val_seq[is_door,5] % (np.pi) < (np.pi/2 + 2*np.pi/res), val_seq[is_door,5] % (np.pi) > (np.pi/2 - 2*np.pi/res))
   if torch.sum(~is_door) > 0:
-    furn_corners = corners[~is_door,:] # don't use doors for room boundary
-    door_corners = corners[is_door,:]
-    horizontal_corners = door_corners[is_horizontal,:]
-    vertical_corners = door_corners[is_vertical,:]
+    furn_corners = corners[~is_door,:,:] # don't use doors for room boundary
+    door_corners = corners[is_door,:,:]
+    horizontal_corners = door_corners[is_horizontal,:,:]
+    vertical_corners = door_corners[is_vertical,:,:]
     room_min = torch.min(torch.min(torch.cat([furn_corners,horizontal_corners],0),2)[0],0)[0]
     room_max = torch.max(torch.max(torch.cat([furn_corners,horizontal_corners],0),2)[0],0)[0]
     room_min[0] = torch.min(torch.min(torch.cat([furn_corners[:,[0],:],vertical_corners[:,[0],:]],0),2)[0],0)[0]
@@ -642,8 +245,29 @@ def sequence_to_furniture(sequence,dict_int2cat,device='cpu'):
   for i in range(sequence.size(0)):
     furniture.append(Furniture(sequence=sequence[i,:],dict_int2cat=dict_int2cat,device=device))
   return furniture
+    
+def adjust_windoors(room_bb, furniture):
+  """
+  Adjusts the position of windows and doors so they stick to the room boundary
+  """
+  room_front = torch.as_tensor([0.0,1.0])
+  for furn in furniture:
+    if furn.coarse_category in ["door","window"]:
+      is_horizontal = torch.abs(torch.dot(room_front,furn.world_front())) > 0.9
+      is_vertical = torch.abs(torch.dot(room_front,furn.world_front())) < 0.1
+      if is_horizontal:
+        furn_borders = furn.pos + furn.world_front() * furn.dim[1]/2
+        border_dists = room_bb[:,[1]] - furn_borders[1].view(1,1)
+        min_index = torch.argmin(torch.abs(border_dists))
+        furn.pos[1] = furn.pos[1] + border_dists.flatten()[min_index]
+      elif is_vertical:
+        furn_borders = furn.pos + furn.world_front() * furn.dim[1]/2
+        border_dists = room_bb[:,[0]] - furn_borders[0].view(1,1)
+        min_index = torch.argmin(torch.abs(border_dists))
+        furn.pos[0] = furn.pos[0] + border_dists.flatten()[min_index]
+  return furniture
 
-def quantize_sequence(sequence,minvalue_dict,maxvalue_dict,res):
+def quantize_sequence(sequence,minvalue_dict,maxvalue_dict,res,corner_pos=False):
   """
   Quantizes a sequence based on the minimum and maximum values for each category
   """
@@ -656,13 +280,19 @@ def quantize_sequence(sequence,minvalue_dict,maxvalue_dict,res):
   val_max[:,5] = np.pi # maximum rotation
   round_up = sequence[:,5] <= -np.pi + np.pi / res
   sequence[round_up,5] += 2 * np.pi # make sure rounding at +-pi is correct
+  
+  if corner_pos:
+    front = torch.stack([-torch.sin(sequence[:,5]),torch.cos(sequence[:,5])],-1)
+    side = torch.stack([-front[:,1],front[:,0]],-1)
+    sequence[:,1:3] = sequence[:,1:3] + side[:,:] * 0.5 * sequence[:,[3]] - front[:,:] * 0.5 * sequence[:,[4]]
+
   quantization = (sequence - val_min) / (val_max - val_min)
   quantization[:,1:] = quantization[:,1:] * (res-1)
   quantization = torch.maximum(quantization, torch.zeros_like(quantization)) # clip to range [0,res-1]
   quantization = torch.minimum(quantization, torch.ones_like(quantization) * res-1)
   return torch.round(quantization).int()
 
-def unquantize_sequence(sequence,minvalue_dict,maxvalue_dict,res,device='cpu'):
+def unquantize_sequence(sequence,minvalue_dict,maxvalue_dict,res,corner_pos=False,device='cpu'):
   """
   Unquantizes a sequence based on the minimum and maximum values for each category
   """
@@ -676,213 +306,32 @@ def unquantize_sequence(sequence,minvalue_dict,maxvalue_dict,res,device='cpu'):
   res_tensor = torch.ones_like(val_min,device=device) * (res-1)
   res_tensor[:,0] = 1.0
   reconstruction = val_min + (sequence / res_tensor) * (val_max - val_min)
-  return reconstruction
-
-def quantize_sequence_grid(sequence,minvalue_dict,maxvalue_dict,res):
-  """
-  Quantizes a sequence based on the room dimensions (like dividing the room with a grid)
-  """
-  seq = sequence.clone()
-  cat_ind = seq[:,0].int().tolist()
-
-  val_min = minvalue_dict[cat_ind[0]].clone().view(1,-1)
-  val_max = maxvalue_dict[cat_ind[0]].clone().view(1,-1)
-  val_min[:,0:3] = 0.0 # categories should not change, position should be 0
-  val_max[:,0:3] = 1.0
-  val_min[:,5] = -np.pi + 2 * np.pi / res # minimum rotation
-  val_max[:,5] = np.pi # maximum rotation
-  val_min = val_min.repeat(sequence.size(0),1)
-  val_max = val_max.repeat(sequence.size(0),1)
-
-  is_window = (sequence[:,0].int() == 2)
-  is_door = (sequence[:,0].int() == 1)
-  is_windoor = torch.logical_or(is_window,is_door)
-  room_quantized = (seq[0,:] - val_min[0,:]) / (val_max[0,:] - val_min[0,:])
-  room_quantized[1:] = room_quantized[1:] * (res-1)
-  room_quantized = torch.round(room_quantized).int()
-  room_unquantized = val_min[0,:] + (room_quantized / (res-1)) * (val_max[0,:] - val_min[0,:])
-
-  # use corner as position and move room pos to 0,0
-  obj_up = torch.stack([-torch.sin(seq[:,5]),torch.cos(seq[:,5])],-1)
-  obj_left = torch.stack([-obj_up[:,1],obj_up[:,0]],-1)
-  seq[:,1:3] = seq[:,1:3] + obj_left[:,:] * 0.5 * seq[:,[3]] - obj_up[:,:] * 0.5 * seq[:,[4]]
-  seq[:,1:3] = seq[:,1:3] - seq[[0],1:3]
-
-  is_wider = seq[0,3] >= seq[0,4]
-  if ~is_wider:
-    seq[0,5] = -np.pi / 2.0
-    seq[0,[3,4]] = seq[0,[4,3]]
-    unit_length = room_unquantized[4] / (res-2)
-    val_min[0,3] = val_min[0,4]
-    val_max[0,3] = val_max[0,4]
-  else:
-    unit_length = room_unquantized[3] / (res-2)
-  val_min[0:,1:3] = -unit_length
-  val_max[0:,1:3] = unit_length * (res-2)
-  val_min[1:,3] = unit_length
-  val_max[1:,3] = unit_length * res
-  val_min[:,4] = unit_length
-  val_max[:,4] = unit_length * res
-
-  room_min = val_min[0,:].clone()
-  room_max = val_max[0,:].clone()
-  room_quantized = (seq[0,:] - room_min) / (room_max - room_min)
-  room_quantized[1:] = room_quantized[1:] * (res-1)
-  room_quantized = torch.round(room_quantized).int()
-  room_unquantized = room_min + (room_quantized / (res-1)) * (room_max - room_min)
-  room_scale_diff = room_unquantized[3:5] / seq[0,3:5]
-
-  if is_wider:
-    seq[1:,[1]] = seq[1:,[1]] * room_scale_diff[0].view(-1,1)
-    seq[1:,[2]] = seq[1:,[2]] * room_scale_diff[1].view(-1,1)
-    seq[1:,3] = seq[1:,3] * torch.linalg.norm(room_scale_diff.view(-1,2) * obj_left[1:,:],dim=1)
-    seq[1:,4] = seq[1:,4] * torch.linalg.norm(room_scale_diff.view(-1,2) * obj_up[1:,:],dim=1)
-  else:
-    seq[1:,[1]] = seq[1:,[1]] * room_scale_diff[1].view(-1,1)
-    seq[1:,[2]] = seq[1:,[2]] * room_scale_diff[0].view(-1,1)
-    seq[1:,3] = seq[1:,3] * torch.linalg.norm(room_scale_diff[[1,0]].view(-1,2) * obj_left[1:,:],dim=1)
-    seq[1:,4] = seq[1:,4] * torch.linalg.norm(room_scale_diff[[1,0]].view(-1,2) * obj_up[1:,:],dim=1)
-  seq[is_windoor,1:3] = seq[is_windoor,1:3] + obj_up[is_windoor,:] * 1.0 * (seq[is_windoor,4].view(-1,1) - unit_length)
-  seq[is_windoor,4] = unit_length
-
-  # quantize position and adjust length and width
-  p = 1
-  pos_quantized = (seq[p:,1:3] - val_min[p:,1:3]) / (val_max[p:,1:3] - val_min[p:,1:3])
-  pos_quantized = pos_quantized * (res-1)
-  pos_quantized = torch.round(pos_quantized).int()
-  pos_unquantized = val_min[p:,1:3] + (pos_quantized / (res-1)) * (val_max[p:,1:3] - val_min[p:,1:3])
-  pos_diff = pos_unquantized - seq[p:,1:3]
-
-  round_up = seq[:,5] <= -np.pi + np.pi / res
-  seq[round_up,5] += 2 * np.pi # make sure rounding at +-pi is correct
-  quantization = (seq - val_min) / (val_max - val_min)
-  quantization[:,1:] = quantization[:,1:] * (res-1)
-  quantization = torch.round(quantization)
-
-  # adjust doors and windows
-  # angles 15, 31, 47 and 63 are possible
-  windoor = quantization[is_windoor,:]
-  if is_wider:
-    for i in range(windoor.size(0)):
-      if windoor[i,5] == (res/4-1):
-        if windoor[i,1] > (res / 2 - 1):
-          windoor[i,1] = res-2
-        if windoor[i,1] < (res / 2 - 1):
-          windoor[i,1] = 0
-      if windoor[i,5] == (res/2-1):
-        if windoor[i,2] > (1 + quantization[0,4] / 2):
-          windoor[i,2] = quantization[0,4] + 2
-        if windoor[i,2] < (1 + quantization[0,4] / 2):
-          windoor[i,2] = 0
-      if windoor[i,5] == (3*res/4-1):
-        if windoor[i,1] > (res / 2 - 1):
-          windoor[i,1] = res-1
-        if windoor[i,1] < (res / 2 - 1):
-          windoor[i,1] = 2
-      if windoor[i,5] == (res-1):
-        if windoor[i,2] > (1 + quantization[0,4] / 2):
-          windoor[i,2] = quantization[0,4] + 2
-        if windoor[i,2] < (1 + quantization[0,4] / 2):
-          windoor[i,2] = 2
-  else:
-    for i in range(windoor.size(0)):
-      if windoor[i,5] == (res/4-1):
-        if windoor[i,1] > (1 + quantization[0,4] / 2):
-          windoor[i,1] = quantization[0,4] + 1
-        if windoor[i,1] < (1 + quantization[0,4] / 2):
-          windoor[i,1] = 0
-      if windoor[i,5] == (res/2-1):
-        if windoor[i,2] > (res / 2 - 1):
-          windoor[i,2] = res-2
-        if windoor[i,2] < (res / 2 - 1):
-          windoor[i,2] = 0
-      if windoor[i,5] == (3*res/4-1):
-        if windoor[i,1] > (1 + quantization[0,4] / 2):
-          windoor[i,1] = quantization[0,4] + 2
-        if windoor[i,1] < (1 + quantization[0,4] / 2):
-          windoor[i,1] = 2
-      if windoor[i,5] == (res-1):
-        if windoor[i,2] > (res / 2 - 1):
-          windoor[i,2] = res-1
-        if windoor[i,2] < (res / 2 - 1):
-          windoor[i,2] = 2
-  quantization[is_windoor,:] = windoor
-
-  quantization = torch.maximum(quantization, torch.zeros_like(quantization)) # clip to range [0,res-1]
-  quantization = torch.minimum(quantization, torch.ones_like(quantization) * (res-1))
-
-  return quantization.int()
-
-def unquantize_sequence_grid(sequence,minvalue_dict,maxvalue_dict,res,adjust_windows=True,device='cpu'):
-  """
-  Unquantizes a sequence based on the room dimensions (like dividing the room with a grid)
-  """
-  cat_ind = sequence[:,0].int().tolist()
-  is_wider = sequence[0,5] >= (res/2 - 1)
-  val_min = minvalue_dict[cat_ind[0]].clone().view(1,-1).to(device)
-  val_max = maxvalue_dict[cat_ind[0]].clone().view(1,-1).to(device)
-  val_min[:,0] = 0.0 # categories should not change
-  val_max[:,0] = 1.0
-  val_min[:,5] = -np.pi + 2 * np.pi / res # minimum rotation
-  val_max[:,5] = np.pi # maximum rotation
-  val_min = val_min.repeat(sequence.size(0),1)
-  val_max = val_max.repeat(sequence.size(0),1)
-
-  if ~is_wider:
-    val_min[0,3] = val_min[0,4]
-    val_max[0,3] = val_max[0,4]
-  room_width = val_min[0,3] + sequence[0,3] / (res-1) *  (val_max[0,3] - val_min[0,3])
-  unit_length = room_width / (res-2)
-  val_min[0:,1:3] = -unit_length
-  val_max[0:,1:3] = unit_length * (res-2)
-  val_min[1:,3] = unit_length
-  val_max[1:,3] = unit_length * res
-  val_min[:,4] = unit_length
-  val_max[:,4] = unit_length * res
-
-  # post-process doors and windows that should be outside
-  if adjust_windows:
-    is_window = (sequence[:,0].int() == 2)
-    is_door = (sequence[:,0].int() == 1)
-    is_windoor = torch.logical_or(is_window,is_door)
-    windoor = sequence[is_windoor,:]
-    if is_wider:
-      for i in range(windoor.size(0)):
-        if (windoor[i,5] == (3*res/4-1)) and (windoor[i,1] == (res-1)):
-          windoor[i,1] = windoor[i,1] + 1
-        if (windoor[i,5] == (res-1)) and (windoor[i,2] == 2 + sequence[0,4]):
-          windoor[i,2] = windoor[i,2] + 1
-    else:
-      for i in range(windoor.size(0)):
-        if (windoor[i,5] == (3*res/4-1)) and (windoor[i,1] == 2 + sequence[0,4]):
-          windoor[i,1] = windoor[i,1] + 1
-        if (windoor[i,5] == (res-1)) and (windoor[i,2] == (res-1)):
-          windoor[i,2] = windoor[i,2] + 1
-    sequence[is_windoor] = windoor
-
-  res_tensor = torch.ones_like(val_min,device=device) * (res-1)
-  res_tensor[:,0] = 1.0
-  reconstruction = val_min + (sequence / res_tensor) * (val_max - val_min)
-
-  if ~is_wider:
-    reconstruction[0,5] = 0
-    reconstruction[0,[3,4]] = reconstruction[0,[4,3]]
-  obj_up = torch.cat([-torch.sin(reconstruction[:,[5]]),torch.cos(reconstruction[:,[5]])],-1)
-  obj_left = torch.cat([-torch.cos(reconstruction[:,[5]]),-torch.sin(reconstruction[:,[5]])],-1)
-  reconstruction[:,1:3] = reconstruction[:,1:3]  - obj_left * 0.5 * reconstruction[:,[3]] + obj_up * 0.5 * reconstruction[:,[4]]
+  
+  if corner_pos:
+    front = torch.stack([-torch.sin(reconstruction[:,5]),torch.cos(reconstruction[:,5])],-1)
+    side = torch.stack([-front[:,1],front[:,0]],-1)
+    reconstruction[:,1:3] = reconstruction[:,1:3] - side[:,:] * 0.5 * reconstruction[:,[3]] + front[:,:] * 0.5 * reconstruction[:,[4]]
 
   return reconstruction
 
-def sequence_statistics(sequences, n_cats=20):
+def sequence_statistics(sequences, n_cats=31, res=256):
   """
   Computes statistics about the occurence of different furniture categories in the dataset
   """
   all_count = torch.zeros(sequences.size(0),n_cats)
+  attr_count = torch.zeros(n_cats,5,res)
+  room_sizes = torch.zeros(sequences.size(0),2)
   for i in range(sequences.size(0)):
+    room_sizes[i,:] = sequences[i,3:5]
     seq_cats = sequences[i,0:-2:6]
     for j in range(seq_cats.size(0)):
       if seq_cats[j] < n_cats:
-        all_count[i,seq_cats[j]] += 1
+        cat_ind = int(seq_cats[j])
+        all_count[i,cat_ind] += 1
+        for attr_ind in range(5):
+          attr_val = sequences[i,j*6+attr_ind+1].long()
+          if attr_val < res:
+            attr_count[cat_ind,attr_ind,attr_val] += 1
   count_mean = torch.mean(all_count,0)
   count_median = torch.median(all_count,0)[0]
   count_std = torch.std(all_count,0)
@@ -893,7 +342,17 @@ def sequence_statistics(sequences, n_cats=20):
   for i in range(n_cats):
     count_hist = torch.cat([count_hist,torch.histc(all_count[:,i],bins=n_bins,min=-0.5,max=5.5).unsqueeze(1)],1)
   count_hist = torch.transpose(count_hist / sequences.size(0),0,1)
-  return {"mean": count_mean,"median": count_median,"std": count_std,"min": count_min,"max": count_max,"hist": count_hist}
+  statistics = {}
+  statistics["mean"] = count_mean
+  statistics["median"] = count_median
+  statistics["std"] = count_std
+  statistics["min"] = count_min
+  statistics["max"] = count_max
+  statistics["hist"] = count_hist
+  statistics["per_room_count"] = all_count
+  statistics["room_sizes"] = room_sizes
+  statistics["attribute_count"] = attr_count
+  return statistics
 
 def plot_room(furniture, dict_cat2int, path_save_plot=None):
   """
@@ -935,8 +394,8 @@ def plot_room(furniture, dict_cat2int, path_save_plot=None):
     plt.savefig(path_save_plot)
   else:
     plt.show()
-
-def plot_sequences_grid(sequences, dict_int2cat, dict_cat2int, minvalue_dict, maxvalue_dict, res, text=[], path_save_plots=None):
+    
+def plot_sequences(sequences, dict_int2cat, dict_cat2int, minvalue_dict, maxvalue_dict, res, text=[], path_save_plots=None):
   """
   Creates a 2D-plot of the given layout for each input sequence
   """
@@ -946,7 +405,7 @@ def plot_sequences_grid(sequences, dict_int2cat, dict_cat2int, minvalue_dict, ma
     room_seq = room_sequences[i,:-1].view(-1,6)
     valid_row = torch.logical_and(room_seq[:,0] < n_cats,torch.sum(room_seq >= res,1) < 1)
     room_seq = room_seq[valid_row,:]
-    reconstructed = unquantize_sequence_grid(room_seq,minvalue_dict,maxvalue_dict,res)
+    reconstructed = unquantize_sequence(room_seq,minvalue_dict,maxvalue_dict,res)
     furniture = sequence_to_furniture(reconstructed,dict_int2cat)
     path_save_plot = None
     if path_save_plots:
@@ -999,52 +458,6 @@ def generate_scenes(model,n_scenes,res=256,max_seq_len=127,top_k=0,top_p=0.9,max
     new_sequences = sequence.to('cpu')
     return new_sequences
 
-def evaluate_scenes(sequences, minvalue_dict, maxvalue_dict, dict_cat2fun, res=256, use_log=True, grid_quantization=True, device='cpu', use_alt_loss=False):
-  """
-  Evaluates the layout in terms of ergonomic score for each given sequence
-  """
-  n_cats = len(minvalue_dict.keys())
-  ergo_scores_new = []
-  for i in range(sequences.size(0)):
-    room_seq = sequences[i,:-1].view(-1,6)
-    valid_row = torch.logical_and(room_seq[:,0] < n_cats,torch.sum(room_seq >= res,1) < 1)
-    if torch.sum(valid_row) > 1:
-      room_seq = room_seq[valid_row,:]
-      if (room_seq[0,0] == 0):
-        seq_ergo_scores = []
-        seq_total_score = torch.zeros(1,device=device)
-        n_losses = 0
-        if grid_quantization: 
-          unquantized = unquantize_sequence_grid(room_seq,minvalue_dict,maxvalue_dict,res,device=device)
-        else:
-          unquantized = unquantize_sequence(room_seq,minvalue_dict,maxvalue_dict,res,device=device)
-        if use_alt_loss:
-          seq_ergo_scores.append(score_overlap(unquantized, minvalue_dict,maxvalue_dict,res,dict_cat2fun,use_log=use_log,device=device))
-        else:
-          seq_ergo_scores.append(score_read_book(unquantized, minvalue_dict,maxvalue_dict,res,dict_cat2fun,use_log=use_log,device=device))
-          seq_ergo_scores.append(score_watch_tv(unquantized, minvalue_dict,maxvalue_dict,res, dict_cat2fun,use_log=use_log,device=device))
-          seq_ergo_scores.append(score_use_computer(unquantized, minvalue_dict,maxvalue_dict,res, dict_cat2fun,use_log=use_log,device=device))
-          seq_ergo_scores.append(score_work_table(unquantized, minvalue_dict,maxvalue_dict,res, dict_cat2fun,use_log=use_log,device=device))
-        for score in seq_ergo_scores:
-          if score > -1.0:
-            if score < 0.0:
-              score = 0.0
-            seq_total_score = seq_total_score + score
-            n_losses = n_losses + 1
-        if seq_ergo_scores[0] < -1.0:
-          seq_total_score = seq_total_score + torch.ones(1,device=device)
-          n_losses = n_losses + 1
-          if use_log:
-            seq_total_score = seq_total_score + 4.0 * torch.ones(1,device=device)
-        if n_losses > 0:
-          seq_total_score = seq_total_score / n_losses
-        ergo_scores_new.append(seq_total_score)
-      else:
-        ergo_scores_new.append(torch.zeros(1,device=device))
-    else:
-      ergo_scores_new.append(torch.zeros(1,device=device))
-  return ergo_scores_new
-
 def generate_and_rank_scenes(n_scenes, n_versions, model_names, minvalue_dict, maxvalue_dict, dict_cat2fun, path_output_data, path_trained_models, res=256, max_seq_len=127, top_k=0, top_p=0.9, order_switch=1, max_noncat=False, max_windoor=False, max_batch_size=200, device='cpu', use_alt_loss=False):
   """
   Generates and evaluates new layouts, then sorts them based on ergonomic score and saves them
@@ -1090,8 +503,7 @@ def generate_and_rank_scenes(n_scenes, n_versions, model_names, minvalue_dict, m
             sequences = sequences[:,:,[0,2,3,4,5,1]].view(sequences.size(0),-1)
           sequences = torch.cat([sequences,last_tokens.view(-1,1)],1)
         all_sequences = torch.cat([all_sequences,sequences],0)
-        ergo_scores.extend(evaluate_scenes(sequences, minvalue_dict, maxvalue_dict, dict_cat2fun, res=res, use_log=True,grid_quantization=True, device='cpu',
-          use_alt_loss=use_alt_loss))
+        ergo_scores.extend(evaluate_scenes(sequences, minvalue_dict, maxvalue_dict, dict_cat2fun, res=res, use_log=True, device='cpu',use_alt_loss=use_alt_loss))
 
       ergo_scores = torch.cat(ergo_scores,0)
       scores_sorted, indices_sorted = torch.sort(ergo_scores)
@@ -1108,201 +520,6 @@ def generate_and_rank_scenes(n_scenes, n_versions, model_names, minvalue_dict, m
     pickle.dump(version_mean_scores, open(path_output_data + model_name + "/" + sampling_type + "_mean_scores.pkl", "wb" ))
   return sampling_type
 
-def signed_dist(p, dim, center=torch.zeros(1,2), theta=torch.zeros(1,),invert=False):
-  """
-  Computes the signed distance from each point p to the bounding box given by dim, center and theta
-  """
-  n_p = p.size(0)
-  device = p.device
-  R = torch.as_tensor([[torch.cos(theta),-torch.sin(theta)],[torch.sin(theta),torch.cos(theta)]],device=theta.device)
-  pt = torch.matmul(p,R) - torch.matmul(center,R)
-  d = torch.abs(pt)-0.5*dim.view(1,2)
-  if invert:
-    return torch.maximum(torch.zeros(n_p,device=device),torch.linalg.norm(torch.maximum(d,torch.zeros(n_p,2,device=device)),dim=1) + torch.minimum(torch.maximum(d[:,0],d[:,1]),torch.zeros(n_p,device=device)))
-  else:
-    return -torch.minimum(torch.zeros(n_p,),torch.linalg.norm(torch.maximum(d,torch.zeros(n_p,2)),dim=1) + torch.minimum(torch.maximum(d[:,0],d[:,1]),torch.zeros(n_p)))
-
-def signed_dist_par(p, dim, center=torch.zeros(1,2), theta=torch.zeros(1,),invert=False):
-  """
-  Computes the signed distance from each point p to each bounding box given by dim, center and theta in parallel
-  """
-  n_p = p.size(0)
-  device = p.device
-  R = torch.stack([torch.stack([torch.cos(theta),-torch.sin(theta)],dim=-1),torch.stack([torch.sin(theta),torch.cos(theta)],dim=-1)],dim=-1)
-  pt = (torch.matmul(p.view(n_p,1,1,2),R) - torch.matmul(center.view(n_p,-1,1,2),R)).squeeze(dim=2)
-  d = torch.abs(pt)-0.5*dim
-  if invert:
-    return torch.maximum(torch.zeros(d.size(0),d.size(1),device=device),torch.linalg.norm(torch.maximum(d,torch.zeros_like(d,device=device)),dim=-1) 
-                         + torch.minimum(torch.maximum(d[:,:,0],d[:,:,1]),torch.zeros(d.size(0),d.size(1),device=device)))
-  else:
-    return -torch.minimum(torch.zeros(d.size(0),d.size(1),device=device),torch.linalg.norm(torch.maximum(d,torch.zeros_like(d,device=device)),dim=-1) 
-                          + torch.minimum(torch.maximum(d[:,:,0],d[:,:,1]),torch.zeros(d.size(0),d.size(1),device=device)))
-
-def eval_overlap(interp_val, label_mat,minvalue_dict,maxvalue_dict,res,dict_cat2fun,use_log=True,device='cpu'):
-  """
-  Evaluates the Overlap loss for each predicted token value
-  """
-  ind_posdimrot = [1,2,3,4,5]
-  cat_all = torch.linspace(1,len(minvalue_dict.keys())-1,len(minvalue_dict.keys())-1).view(1,-1).to(device)
-  is_furn = torch.sum(torch.eq(cat_all,label_mat[:,[0]]),-1) > 0
-  is_valid = torch.sum(interp_val > (res-0.9),1) + torch.sum(label_mat > (res-0.9),1) < 1.0
-  pos_room = label_mat[0,1:3]
-  dim_room = label_mat[0,3:5]
-  rot_room = label_mat[0,5].view(1,)
-  interp_val = interp_val[is_furn,:]
-  label_mat = label_mat[is_furn,:]
-
-  if torch.sum(cat_all) < 1:
-    return -2.0*torch.ones(1,).to(device)
-  categories = interp_val[:,0].view(-1,1)
-  interp_val = interp_val[:,ind_posdimrot]
-  value_mat = label_mat[:,ind_posdimrot].clone()
-
-  # replace gt values with predicted values
-  n_rows = interp_val.size(0)
-  n_cols = interp_val.size(1)
-  n_elem = n_rows * n_cols
-  value_mat = value_mat.repeat(n_elem,1,1)
-  elem_ind = torch.linspace(0,n_elem-1,n_elem,dtype=torch.long,device=device)
-  col_ind = torch.linspace(0,n_cols-1,n_cols,dtype=torch.long,device=device).repeat_interleave(n_rows)
-  row_ind = torch.linspace(0,n_rows-1,n_rows,dtype=torch.long,device=device).repeat(n_cols)
-  value_mat[elem_ind,row_ind,col_ind] = interp_val[row_ind,col_ind]
-
-  # check which categories do not collide
-  is_supporter = torch.sum(torch.eq(dict_cat2fun['supporter'],categories),-1) > 0
-  is_supported = torch.sum(torch.eq(dict_cat2fun['supported'],categories),-1) > 0
-  is_chair = torch.sum(torch.eq(dict_cat2fun['chair'],categories),-1) > 0
-  is_table = torch.sum(torch.eq(dict_cat2fun['table'],categories),-1) > 0
-  is_near_ceil = torch.sum(torch.eq(dict_cat2fun['near_ceil'],categories),-1) > 0
-  is_windoor = torch.sum(torch.eq(dict_cat2fun['windoor'],categories),-1) > 0
-  mat_supp = (is_supporter.view(-1,1) * is_supported.view(1,-1)) + (is_supported.view(-1,1) * is_supporter.view(1,-1)) == 0
-  mat_chairtable = (is_chair.view(-1,1) * is_table.view(1,-1)) + (is_table.view(-1,1) * is_chair.view(1,-1)) == 0
-  mat_ceil = (is_near_ceil.view(-1,1) * is_near_ceil.view(1,-1)) + (~is_near_ceil.view(-1,1) * ~is_near_ceil.view(1,-1))
-  coll_check_mat = mat_supp * mat_chairtable * mat_ceil
-  inv_eye = ~torch.eye(coll_check_mat.size(0),coll_check_mat.size(0),dtype=torch.bool)
-  coll_check_mat = ~coll_check_mat[inv_eye].view(n_rows,n_rows-1)
-
-  ind_mat = torch.zeros_like(value_mat,dtype=torch.bool)
-  ind_mat[elem_ind,row_ind,:] = 1
-  matA = value_mat[ind_mat].view(n_elem,1,5)
-  matB = value_mat[~ind_mat].view(n_elem,-1,5)
-
-  all_pos = matA[:,:,0:2]
-  all_dim = matA[:,:,2:4]
-  all_rot = matA[:,:,4].view(n_elem,1,1)
-  all_front = torch.cat([-torch.sin(all_rot),torch.cos(all_rot)],dim=-1) * 0.5 * all_dim[:,:,[1]]
-  all_side = torch.cat([torch.cos(all_rot),torch.sin(all_rot)],dim=-1) * 0.5 * all_dim[:,:,[0]]
-  all_samples = torch.concat([all_pos, all_pos + all_front, all_pos - all_side, all_pos - all_front, all_pos + all_side,
-                             all_pos + all_front + all_side, all_pos + all_front - all_side, all_pos - all_front - all_side, all_pos - all_front + all_side],dim=0)
-
-  node_weights = torch.as_tensor([16.0,4.0,4.0,4.0,4.0,1.0,1.0,1.0,1.0],device=device).repeat_interleave(n_elem)
-  weights_sum = torch.sum(torch.as_tensor([16.0,4.0,4.0,4.0,4.0,1.0,1.0,1.0,1.0],device=device))
-  e_room = signed_dist(all_samples.squeeze(), dim_room, center=pos_room, theta=rot_room,invert=True)
-  e_objects = signed_dist_par(all_samples, matB[:,:,2:4].repeat(9,1,1), center=matB[:,:,0:2].repeat(9,1,1), theta=matB[:,:,4].repeat(9,1),invert=False)
-  e_room[is_windoor.repeat(9*5)] = 0.0
-  e_objects[coll_check_mat.repeat(9*5,1)] = 0.0
-  e_total = torch.sum(e_objects * node_weights.view(-1,1))
-  e_total = e_total + torch.sum(e_room * node_weights)
-  return e_total / weights_sum * 5.0 #9.0
-
-def score_overlap(labels, minvalue_dict,maxvalue_dict,res,dict_cat2fun,use_log=True,device='cpu'):
-  """
-  Evaluates the Overlap loss for the given layout
-  """
-  label_mat = labels.clone()
-  ind_posdimrot = [1,2,3,4,5]
-  cat_all = torch.linspace(1,len(minvalue_dict.keys())-1,len(minvalue_dict.keys())-1).view(1,-1).to(device)
-  is_furn = torch.sum(torch.eq(cat_all,label_mat[:,[0]]),-1) > 0
-  is_valid = torch.sum(label_mat > (res-0.9),1) < 1.0
-  pos_room = label_mat[0,1:3]
-  dim_room = label_mat[0,3:5]
-  rot_room = label_mat[0,5].view(1,)
-  label_mat = label_mat[torch.logical_and(is_furn, is_valid),:]
-
-  if torch.sum(cat_all) < 1:
-    return -2.0*torch.ones(1,).to(device)
-
-  # check which categories do not collide
-  n_elem = label_mat.size(0)
-  categories = label_mat[:,[0]].view(-1,1)
-  is_supporter = torch.sum(torch.eq(dict_cat2fun['supporter'],categories),-1) > 0
-  is_supported = torch.sum(torch.eq(dict_cat2fun['supported'],categories),-1) > 0
-  is_chair = torch.sum(torch.eq(dict_cat2fun['chair'],categories),-1) > 0
-  is_table = torch.sum(torch.eq(dict_cat2fun['table'],categories),-1) > 0
-  is_near_ceil = torch.sum(torch.eq(dict_cat2fun['near_ceil'],categories),-1) > 0
-  is_windoor = torch.sum(torch.eq(dict_cat2fun['windoor'],categories),-1) > 0
-  mat_supp = (is_supporter.view(-1,1) * is_supported.view(1,-1)) + (is_supported.view(-1,1) * is_supporter.view(1,-1)) == 0
-  mat_chairtable = (is_chair.view(-1,1) * is_table.view(1,-1)) + (is_table.view(-1,1) * is_chair.view(1,-1)) == 0
-  mat_ceil = (is_near_ceil.view(-1,1) * is_near_ceil.view(1,-1)) + (~is_near_ceil.view(-1,1) * ~is_near_ceil.view(1,-1))
-  coll_check_mat = mat_supp * mat_chairtable * mat_ceil
-  inv_eye = ~torch.eye(coll_check_mat.size(0),coll_check_mat.size(0),dtype=torch.bool)
-  coll_check_mat = ~coll_check_mat[inv_eye].view(n_elem,n_elem-1)
-
-  elem_ind = torch.linspace(0,n_elem-1,n_elem,dtype=torch.long,device=device)
-  label_mat = label_mat.repeat(n_elem,1,1)
-  ind_mat = torch.zeros_like(label_mat,dtype=torch.bool)
-  ind_mat[elem_ind,elem_ind,:] = 1
-  matA = label_mat[ind_mat].view(n_elem,1,6)
-  matB = label_mat[~ind_mat].view(n_elem,-1,6)
-
-  all_pos = matA[:,:,1:3]
-  all_dim = matA[:,:,3:5]
-  all_rot = matA[:,:,5].view(n_elem,1,1)
-  all_front = torch.cat([-torch.sin(all_rot),torch.cos(all_rot)],dim=-1) * 0.5 * all_dim[:,:,[1]]
-  all_side = torch.cat([torch.cos(all_rot),torch.sin(all_rot)],dim=-1) * 0.5 * all_dim[:,:,[0]]
-  all_samples = torch.concat([all_pos, all_pos + all_front, all_pos - all_side, all_pos - all_front, all_pos + all_side,
-                             all_pos + all_front + all_side, all_pos + all_front - all_side, all_pos - all_front - all_side, all_pos - all_front + all_side],dim=0)
-
-  node_weights = torch.as_tensor([16.0,4.0,4.0,4.0,4.0,1.0,1.0,1.0,1.0],device=device).repeat_interleave(n_elem)
-  weights_sum = torch.sum(torch.as_tensor([16.0,4.0,4.0,4.0,4.0,1.0,1.0,1.0,1.0],device=device))
-  e_room = signed_dist(all_samples.squeeze(), dim_room, center=pos_room, theta=rot_room,invert=True)
-  e_objects = signed_dist_par(all_samples, matB[:,:,3:5].repeat(9,1,1), center=matB[:,:,1:3].repeat(9,1,1), theta=matB[:,:,5].repeat(9,1),invert=False)
-  e_room[is_windoor.repeat(9)] = 0.0
-  e_objects[coll_check_mat.repeat(9,1)] = 0.0
-  e_total = torch.sum(e_objects * node_weights.view(-1,1))
-  e_total = e_total + torch.sum(e_room * node_weights)
-  return e_total / weights_sum * 5.0
-
-def evaluate_scenes_overlap(sequences, minvalue_dict, maxvalue_dict, dict_cat2fun, use_log=True, grid_quantization=True, device='cpu'):
-  """
-  Evaluates the layout in terms of Overlap loss for each given sequence
-  """
-  n_cats = len(minvalue_dict.keys())
-  ergo_scores_new = []
-  for i in range(sequences.size(0)):
-    room_seq = sequences[i,:-1].view(-1,6)
-    valid_row = torch.logical_and(room_seq[:,0] < n_cats,torch.sum(room_seq >= res,1) < 1)
-    if torch.sum(valid_row) > 1:
-      room_seq = room_seq[valid_row,:]
-      if (room_seq[0,0] == 0):
-        seq_ergo_scores = []
-        seq_total_score = torch.zeros(1,device=device)
-        n_losses = 0
-        if grid_quantization: 
-          unquantized = unquantize_sequence_grid(room_seq,minvalue_dict,maxvalue_dict,res,device=device)
-        else:
-          unquantized = unquantize_sequence(room_seq,minvalue_dict,maxvalue_dict,res,device=device)
-        seq_ergo_scores.append(score_overlap(unquantized, minvalue_dict,maxvalue_dict,res,dict_cat2fun,use_log=use_log,device=device))
-        for score in seq_ergo_scores:
-          if score > -1.0:
-            if score < 0.0:
-              score = 0.0
-            seq_total_score = seq_total_score + score
-            n_losses = n_losses + 1
-        if seq_ergo_scores[0] < -1.0:
-          seq_total_score = seq_total_score + torch.ones(1,device=device)
-          n_losses = n_losses + 1
-          if use_log:
-            seq_total_score = seq_total_score + 4.0 * torch.ones(1,device=device)
-        if n_losses > 0:
-          seq_total_score = seq_total_score / n_losses
-        ergo_scores_new.append(seq_total_score)
-      else:
-        ergo_scores_new.append(torch.zeros(1,device=device))
-    else:
-      ergo_scores_new.append(torch.zeros(1,device=device))
-  return ergo_scores_new
-  
 def get_intersection_area(bbox_0, bbox_1): # taken from sceneformer
   """
   Computes the intersection area between two (axis-aligned) bounding boxes (y-coordinate is the 3rd value)
