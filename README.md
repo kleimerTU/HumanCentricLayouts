@@ -7,7 +7,7 @@ Initial code release for the [LayoutEnhancer paper](https://arxiv.org/abs/TBD), 
 ## Setup
 The simplest way to set up the project is to create a new Anaconda environment using the provided `environment.yaml` file:
 ```
-conda create -f environment.yaml
+conda env create -f environment.yaml
 conda activate LayoutEnhancer
 ```
 Alternatively, we also provide a `requirements.txt` file that can be used to install the required packages in an existing environment using pip:

@@ -19,11 +19,10 @@ def main(argv):
     )
 
     parser.add_argument(
-        "--path_to_config",
+        "path_to_config",
         nargs='+',
         type=str,
-        required=True,
-        help="Paths to the configuration files"
+        help="Paths to the configuration files (accepts multiple inputs)"
     )
     
     parser.add_argument(
@@ -83,7 +82,7 @@ def main(argv):
         
         if args.with_floors:
           val_floors = pickle.load(open( path_input_data + set_name + "_data/" + set_name + "_val_floors" + suffix_name + ".pkl", "rb" ))
-          seq_indices = pickle.load(open( path_input_data + set_name + "_data/" + set_name + "_val_floors" + suffix_name + ".pkl", "rb" ))
+          seq_indices = pickle.load(open( path_output_data + "sequence/" + model_name + "/resampled_" + sampling_type + "_seq_indices.pkl", "rb" ))
             
         nadded = 0
         for j in range(n_sequences):   

@@ -3,7 +3,7 @@ general:
     res: 256
     set_name: "3dfront_livingrooms"
     suffix_name: ""
-    order_switch: 1
+    order_switch: 2
 paths:
     path_input_data: "./data/input"
     path_output_data: "./data/output"
@@ -26,6 +26,8 @@ network:
     continue_epoch: -1
     init_model: "3dfront_base"
     init_model_epoch: "best"
+    augm_strategy: "permute"
+    use_room_masks: False
     pred_sigma: 1.0
     device: "cuda"
 synthesis:

@@ -1,4 +1,5 @@
 import argparse
+from PIL import Image
 import numpy as np
 import os
 import pickle
@@ -12,6 +13,7 @@ except ImportError:
 
 from src import utils
 from src.main_functions import *
+from src.evaluation import *
 from src.network import CustomDataset
 
 def main(argv):
@@ -223,7 +225,7 @@ def main(argv):
     pickle.dump(train_sequences, open(path_input_data + set_name + "_data/" + set_name + "_train_unquantized" + suffix_name + ".pkl", "wb"))
     pickle.dump(valid_masks, open(path_input_data + set_name + "_data/" + set_name + "_train_masks" + suffix_name + ".pkl", "wb"))
     pickle.dump(valid_square, open(path_input_data + set_name + "_data/" + set_name + "_train_square" + suffix_name + ".pkl", "wb"))
-    pickle.dump(valid_floor, open(path_input_data + set_name + "_data/" + set_name + "_train_floor" + suffix_name + ".pkl", "wb"))
+    pickle.dump(valid_floor, open(path_input_data + set_name + "_data/" + set_name + "_train_floors" + suffix_name + ".pkl", "wb"))
     print()
     
     valid_masks = []
@@ -330,7 +332,7 @@ def main(argv):
     pickle.dump(val_sequences, open(path_input_data + set_name + "_data/" + set_name + "_val_unquantized" + suffix_name + ".pkl", "wb"))
     pickle.dump(valid_masks, open(path_input_data + set_name + "_data/" + set_name + "_val_masks" + suffix_name + ".pkl", "wb"))
     pickle.dump(valid_square, open(path_input_data + set_name + "_data/" + set_name + "_val_square" + suffix_name + ".pkl", "wb"))
-    pickle.dump(valid_floor, open(path_input_data + set_name + "_data/" + set_name + "_val_floor" + suffix_name + ".pkl", "wb"))
+    pickle.dump(valid_floor, open(path_input_data + set_name + "_data/" + set_name + "_val_floors" + suffix_name + ".pkl", "wb"))
     print()
 
     # for each category, get the range of possible values

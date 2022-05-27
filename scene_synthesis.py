@@ -10,6 +10,7 @@ except ImportError:
 
 from src import utils
 from src.main_functions import *
+from src.evaluation import *
 from src.reconstruction import *
 from src.modeling_gpt2_custom import GPT2LMHeadModelCustom
 
@@ -66,7 +67,7 @@ def main(argv):
     path_output_data = config["paths"]["path_output_data"] + "/sequence/"
     path_trained_models = config["paths"]["path_trained_models"] + "/"
     path_3dfront_data = config["paths"]["path_3dfront_data"] + "/"
-    n_versions = config["network"]["epochs"]
+    n_versions = 10
     model_names = [config["network"]["model_name"]]
     if torch.cuda.is_available():
       device = torch.device(config["network"]["device"])
@@ -200,17 +201,15 @@ def main(argv):
         sequences = torch.cat([sequences,last_tokens.view(-1,1)],1)
 
       sequences = sequences.to('cpu')
-      ergo_score = evaluate_scenes(sequences, minvalue_dict, maxvalue_dict, dict_cat2fun, use_log=True,grid_quantization=False, device=sequences.device,
-        use_alt_loss=use_alt_loss)
+      ergo_score = evaluate_scenes(sequences, minvalue_dict, maxvalue_dict, dict_cat2fun, use_log=True, device=sequences.device,use_alt_loss=use_alt_loss)
       ergo_scores = torch.cat(ergo_score,0)
-      scores_sorted, indices_sorted = torch.sort(ergo_scores)
 
       if not os.path.isdir(path_output_data):
         os.mkdir(path_output_data)
       if not os.path.isdir(path_output_data + model_name):
         os.mkdir(path_output_data + model_name)
-      pickle.dump(scores_sorted.to('cpu'), open(path_output_data + model_name + "/" + "/resampled_" + sampling_type + "_scores.pkl", "wb" ))
-      pickle.dump(sequences[indices_sorted,:].to('cpu'), open(path_output_data + model_name + "/" + "/resampled_" + sampling_type + "_sequences.pkl", "wb" ))
+      pickle.dump(ergo_scores.to('cpu'), open(path_output_data + model_name + "/" + "/resampled_" + sampling_type + "_scores.pkl", "wb" ))
+      pickle.dump(sequences[:,:].to('cpu'), open(path_output_data + model_name + "/" + "/resampled_" + sampling_type + "_sequences.pkl", "wb" ))
 
       if args.num_room_plots > 0:
         if not os.path.isdir(config["paths"]["path_output_data"] + "/plots/"):

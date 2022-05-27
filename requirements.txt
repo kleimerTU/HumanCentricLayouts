@@ -1,6 +1,7 @@
 matplotlib>=3.2.2
 numpy>=1.21.5
 torch>=1.10.0+cu111
+torchvision>=0.11.3+cu111
 transformers>=4.11.3
 
 --find-links https://download.pytorch.org/whl/torch_stable.html

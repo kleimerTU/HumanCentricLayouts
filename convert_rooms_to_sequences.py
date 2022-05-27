@@ -12,6 +12,7 @@ except ImportError:
 
 from src import utils
 from src.main_functions import *
+from src.evaluation import *
 from src.network import CustomDataset
 
 def main(argv):

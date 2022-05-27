@@ -26,6 +26,8 @@ network:
     continue_epoch: -1
     init_model: null
     init_model_epoch: "best"
+    augm_strategy: "permute"
+    use_room_masks: False
     pred_sigma: 1.0
     device: "cuda"
 synthesis:

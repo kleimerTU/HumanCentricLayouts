@@ -7,6 +7,7 @@ from torch.nn import functional as F
 import transformers
 
 from src.modeling_gpt2_custom import GPT2LMHeadModelCustom
+#from src.evaluation import *
 
 def gaussian1d(mu,sigma,res,device='cpu'):
   """
@@ -413,112 +414,6 @@ def plot_sequences(sequences, dict_int2cat, dict_cat2int, minvalue_dict, maxvalu
     plot_room(furniture,dict_cat2int,path_save_plot=path_save_plot)
     if len(text) > i:
       print(text[i])
-
-def generate_scenes(model,n_scenes,res=256,max_seq_len=127,top_k=0,top_p=0.9,max_noncat=False,max_windoor=False):
-  """
-  Generates sequences using the given trained model, without collision-detection
-  """
-  # if max_noncat is true, pos, dim, ori of objects is not randomly sampled (except windows and doors)
-  # if max_windoor is true, pos, dim, ori of windows and doors is also not randomly sampled
-  with torch.no_grad():
-    model.eval()
-    sequence = torch.zeros(n_scenes,1,dtype=torch.long,device=model.device)
-    pos_ids = torch.zeros(n_scenes,1,dtype=torch.long,device=model.device)
-    ind_ids = torch.zeros(n_scenes,1,dtype=torch.long,device=model.device)
-    cur_token = sequence
-    past = None
-    post_windoor = torch.zeros(n_scenes, dtype=torch.bool)
-    for j in range(max_seq_len-1):
-      i = j + 1
-      input_ids = cur_token
-      output = model(input_ids,position_ids=pos_ids,index_ids=ind_ids,past_key_values=past)
-      next_token_logits = output.logits[:,-1, :]
-      filtered_next_token_logits = transformers.top_k_top_p_filtering(next_token_logits,top_k=top_k,top_p=top_p)
-      probs = F.softmax(filtered_next_token_logits, dim=-1)
-      cur_token = torch.multinomial(probs, num_samples=1)
-      if max_noncat and (i > 5):
-        if (i % 6) == 0: 
-          if max_windoor:
-            post_windoor = cur_token > 0 # not room
-          else:
-            post_windoor = cur_token > 2 # not room, window or door
-        else:
-          cur_token_max = output.logits.argmax(axis=-1)
-          cur_token[post_windoor] = cur_token_max[post_windoor]
-
-      past = output.past_key_values
-      sequence = torch.cat([sequence,cur_token],1)
-      pos_ids += 1
-      is_end = (cur_token == res).flatten()
-      if res > max_seq_len:
-        ind_ids[is_end,:] = torch.ones(torch.sum(is_end),1,dtype=torch.long,device=model.device) * (max_seq_len-1)
-      else:
-        ind_ids[is_end,:] = torch.ones(torch.sum(is_end),1,dtype=torch.long,device=model.device) * res
-      ind_ids[~is_end,:] = (ind_ids[~is_end,:] + 1) % 6
-    new_sequences = sequence.to('cpu')
-    return new_sequences
-
-def generate_and_rank_scenes(n_scenes, n_versions, model_names, minvalue_dict, maxvalue_dict, dict_cat2fun, path_output_data, path_trained_models, res=256, max_seq_len=127, top_k=0, top_p=0.9, order_switch=1, max_noncat=False, max_windoor=False, max_batch_size=200, device='cpu', use_alt_loss=False):
-  """
-  Generates and evaluates new layouts, then sorts them based on ergonomic score and saves them
-  """
-  # order switch: 0 - no switch; 1 - orient,dim,pos; 2 - orient,pos,dim 
-  # max_noncat: if True, pos, dim and loc are not sampled, but the best option is chosen (except windows and doors)
-  # if max_windoor is true, pos, dim, ori of windows and doors is also not randomly sampled
-  n_batches = 1
-  if n_scenes > max_batch_size:
-    n_batches = int(n_scenes / max_batch_size)
-    n_scenes = max_batch_size
-  if top_k > 0:
-    sampling_type = "k" + str(top_k)
-  else:
-    sampling_type = "p" + str(top_p).replace(".", "")
-  if max_noncat:
-    sampling_type = sampling_type + "max"
-    if max_windoor:
-      sampling_type = sampling_type + "wd"
-
-  model_mean_scores = []
-  model_median_scores = []
-  model_variance_scores = []
-  for i in range(len(model_names)):
-    model_name = 'model_' + model_names[i]
-    version_mean_scores = []
-    for version in range(n_versions):
-      print("Evaluating", model_name, "- Epoch", version+1, "of", n_versions, end="\r")
-      version_name = "model_tmp" + str(version)
-      model = GPT2LMHeadModelCustom.from_pretrained(path_trained_models + model_name + "/" + version_name + "/")
-      model.to(device)
-
-      ergo_scores = []
-      all_sequences = torch.empty(0,max_seq_len,dtype=torch.long)
-      for i in range(n_batches):
-        sequences = generate_scenes(model,n_scenes,res=res,max_seq_len=max_seq_len,top_k=top_k,top_p=top_p,max_noncat=max_noncat)
-        if order_switch > 0:
-          last_tokens = sequences[:,-1]
-          sequences = sequences[:,:-1].view(sequences.size(0),-1,6)
-          if order_switch == 1:
-            sequences = sequences[:,:,[0,4,5,2,3,1]].view(sequences.size(0),-1)
-          else:
-            sequences = sequences[:,:,[0,2,3,4,5,1]].view(sequences.size(0),-1)
-          sequences = torch.cat([sequences,last_tokens.view(-1,1)],1)
-        all_sequences = torch.cat([all_sequences,sequences],0)
-        ergo_scores.extend(evaluate_scenes(sequences, minvalue_dict, maxvalue_dict, dict_cat2fun, res=res, use_log=True, device='cpu',use_alt_loss=use_alt_loss))
-
-      ergo_scores = torch.cat(ergo_scores,0)
-      scores_sorted, indices_sorted = torch.sort(ergo_scores)
-      version_mean_scores.append(torch.mean(ergo_scores).item())
-      if not os.path.isdir(path_output_data + model_name):
-        os.mkdir(path_output_data + model_name)
-      if not os.path.isdir(path_output_data + model_name + "/" + version_name):
-        os.mkdir(path_output_data + model_name + "/" + version_name)
-      pickle.dump(scores_sorted, open(path_output_data + model_name + "/" + version_name + "/" + sampling_type + "_scores.pkl", "wb" ))
-      pickle.dump(all_sequences[indices_sorted,:], open(path_output_data + model_name + "/" + version_name + "/" + sampling_type + "_sequences.pkl", "wb" ))
-      
-    print()
-    model_mean_scores.append(version_mean_scores)
-    pickle.dump(version_mean_scores, open(path_output_data + model_name + "/" + sampling_type + "_mean_scores.pkl", "wb" ))
-  return sampling_type
 
 def get_intersection_area(bbox_0, bbox_1): # taken from sceneformer
   """

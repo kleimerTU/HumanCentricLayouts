@@ -10,6 +10,8 @@ except ImportError:
 
 from src import utils
 from src.main_functions import *
+from src.network import *
+from src.evaluation import *
 from src.reconstruction import *
 from src.modeling_gpt2_custom import GPT2LMHeadModelCustom
 
@@ -66,7 +68,7 @@ def main(argv):
     path_output_data = config["paths"]["path_output_data"] + "/sequence/"
     path_trained_models = config["paths"]["path_trained_models"] + "/"
     path_3dfront_data = config["paths"]["path_3dfront_data"] + "/"
-    n_versions = config["network"]["epochs"]
+    n_versions = 10
     model_names = [config["network"]["model_name"]]
     if torch.cuda.is_available():
       device = torch.device(config["network"]["device"])
@@ -82,14 +84,14 @@ def main(argv):
     seq_indices = []
     val_sequences = pickle.load(open( path_input_data + set_name + "_data/" + set_name + "_val_quantized" + suffix_name + ".pkl", "rb" ))
     room_masks_val = pickle.load(open( path_input_data + set_name + "_data/" + set_name + "_val_masks" + suffix_name + ".pkl", "rb" ))
+    room_floors_val = pickle.load(open( path_input_data + set_name + "_data/" + set_name + "_val_floors" + suffix_name + ".pkl", "rb" ))
     dataset_val = CustomDatasetPermute(val_sequences[:], max_seq_len,res,ergo_weights=[],room_masks=room_masks_val)
     val_sequences = torch.as_tensor(val_sequences)[:,:-1]
     rand_ind = torch.randperm(val_sequences.size(0))
-    for j in range(n_sequences):
+    for j in range(val_sequences.size(0)):
       seq = val_sequences[rand_ind[j],:].view(-1,6)
       keep_furn = seq[:,0] < 3 # room, window or door
       seq_starts.append(seq[keep_furn,:].flatten())
-      seq_indices.append(rand_ind[j])
     room_mode = "replace_all_after"
     room_enc_dim = 1
     if "all" in room_mode:
@@ -126,6 +128,7 @@ def main(argv):
       
       sequences = torch.empty(0,max_seq_len,dtype=torch.long,device=model.device)
       seq_added = 0
+      n_skip = 0
       with torch.no_grad():
         model.eval()
         room_encoder.eval()
@@ -133,7 +136,8 @@ def main(argv):
           print("Creating new scenes with model", model_n, "-", str(seq_added+1), "of" , str(n_sequences) , end="\r")
           nodes = None  
           scene_dict = None
-          seq_start = seq_starts[seq_added].view(-1,6)
+          seq_start_index = (seq_added+n_skip) % len(seq_starts)
+          seq_start = seq_starts[seq_start_index].view(-1,6)
           if order_switch > 0:
             if order_switch == 1:
               seq_start = seq_start[:,[0,5,3,4,1,2]]
@@ -141,7 +145,8 @@ def main(argv):
               seq_start = seq_start[:,[0,5,1,2,3,4]]
           n_furn_start = seq_start.size(0)
           seq_start = seq_start.view(1,-1)
-          nodes, collision, scene_dict = add_furniture(seq_start, nodes, scene_dict, model_source,add_all=True,collision_check=False, order_switch=order_switch)[:3]
+          nodes, collision, scene_dict = add_furniture(seq_start, minvalue_dict, maxvalue_dict, dict_int2cat, dict_cat2model, dict_cat2dims,  
+                  model2minp, model2maxp, res=res, nodes=nodes, scene_dict=scene_dict, invalid_models=invalid_models,order_switch=order_switch, collision_check=False, add_all=True)[:3]
           sequence = seq_start.to(model.device)
           pos_ids = torch.linspace(0,sequence.size(1)-1,sequence.size(1),dtype=torch.long,device=model.device).view(1,-1)
           ind_ids = pos_ids.clone() % 6
@@ -152,7 +157,11 @@ def main(argv):
           cont_count = 0
           post_windoor = True
           posmap = posmap.to(device)
-          cur_masks = room_masks_val[seq_added].view(1,1,256,256).float().to(model.device)
+          plt.imshow(room_masks_val[rand_ind[seq_start_index]][0,:,:])
+          plt.show()
+          plt.scatter(room_floors_val[rand_ind[seq_start_index]]["v"][:,0],room_floors_val[rand_ind[seq_start_index]]["v"][:,2])
+          plt.show()
+          cur_masks = room_masks_val[rand_ind[seq_start_index]].view(1,1,256,256).float().to(model.device)
           cur_masks = torch.cat([cur_masks,posmap.view(2,256,256).repeat([cur_masks.size(0),1,1,1])],dim=1)
           room_encoding = room_encoder(cur_masks)
           if "all" in room_mode:
@@ -201,7 +210,8 @@ def main(argv):
               if cont_count > 20:
                 break
               if cur_token < res:
-                nodes, collision, scene_dict = add_furniture(sequence.clone().to('cpu'), nodes, scene_dict, model_source,collision_check=collision_check, order_switch=order_switch)[:3]
+                nodes, collision, scene_dict = add_furniture(sequence.clone().to('cpu'), minvalue_dict, maxvalue_dict, dict_int2cat, dict_cat2model, dict_cat2dims,  
+                  model2minp, model2maxp, res=res, nodes=nodes, scene_dict=scene_dict, invalid_models=invalid_models,order_switch=order_switch,collision_check=collision_check)[:3]
                 if collision:
                   if furn_i > 0:
                     coll_count = coll_count + 1
@@ -223,8 +233,7 @@ def main(argv):
                 i = 1
               else:
                 i = 0
-              if coll_count > 20:
-                print("cannot be placed")  
+              if coll_count > 20: 
                 cont_count = cont_count + 1
                 break
             if coll_count > 20:
@@ -235,16 +244,9 @@ def main(argv):
             sequence = torch.cat([sequence,res * torch.ones(1,max_seq_len-sequence.size(1),dtype=torch.long,device=model.device)],dim=1)
             sequences = torch.cat([sequences,sequence],dim=0)
             seq_added = seq_added + 1
-
-      if order_switch > 0:
-        last_tokens = sequences[:,-1]
-        sequences = sequences[:,:-1].view(sequences.size(0),-1,6)
-        if order_switch == 1:
-          sequences = sequences[:,:,[0,4,5,2,3,1]].view(sequences.size(0),-1)
-        else:
-          sequences = sequences[:,:,[0,2,3,4,5,1]].view(sequences.size(0),-1)
-        sequences = torch.cat([sequences,last_tokens.view(-1,1)],1)
-      sequences = sequences.to('cpu')
+            seq_indices.append(rand_ind[seq_start_index])
+          else:
+            n_skip = n_skip + 1
 
       version_mean_scores = []
       version_median_scores = []
@@ -259,17 +261,15 @@ def main(argv):
         sequences = torch.cat([sequences,last_tokens.view(-1,1)],1)
 
       sequences = sequences.to('cpu')
-      ergo_score = evaluate_scenes(sequences, minvalue_dict, maxvalue_dict, dict_cat2fun, use_log=True,grid_quantization=False, device=sequences.device,
-        use_alt_loss=use_alt_loss)
+      ergo_score = evaluate_scenes(sequences, minvalue_dict, maxvalue_dict, dict_cat2fun, use_log=True,device=sequences.device,use_alt_loss=use_alt_loss)
       ergo_scores = torch.cat(ergo_score,0)
-      scores_sorted, indices_sorted = torch.sort(ergo_scores)
 
       if not os.path.isdir(path_output_data):
         os.mkdir(path_output_data)
       if not os.path.isdir(path_output_data + model_name):
         os.mkdir(path_output_data + model_name)
-      pickle.dump(scores_sorted.to('cpu'), open(path_output_data + model_name + "/resampled_" + sampling_type + "_scores.pkl", "wb" ))
-      pickle.dump(sequences[indices_sorted,:].to('cpu'), open(path_output_data + model_name + "/resampled_" + sampling_type + "_sequences.pkl", "wb" ))
+      pickle.dump(ergo_scores.to('cpu'), open(path_output_data + model_name + "/resampled_" + sampling_type + "_scores.pkl", "wb" ))
+      pickle.dump(sequences[:,:].to('cpu'), open(path_output_data + model_name + "/resampled_" + sampling_type + "_sequences.pkl", "wb" ))
       pickle.dump(seq_indices, open(path_output_data + model_name + "/resampled_" + sampling_type + "_seq_indices.pkl", "wb" ))
 
       if args.num_room_plots > 0:

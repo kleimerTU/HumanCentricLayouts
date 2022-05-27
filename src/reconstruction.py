@@ -335,7 +335,7 @@ def reconstruct_3d_scene(full_house_name, nodes, scene_dict, furniture, cat_supp
   house_bbox["min"] = room_min.tolist()
   house_bbox["max"] = room_max.tolist()
   house = {}
-  house["version"] = "atek@1.0"
+  house["version"] = "LayoutEnhancer@1.0"
   house["id"] = full_house_name
   house["up"] = [0,1,0]
   house["front"] = [0,0,1]
@@ -373,10 +373,13 @@ def reconstruct_3d_scene(full_house_name, nodes, scene_dict, furniture, cat_supp
     v_floor = floor_mesh["v"]
     uv_room = floor_mesh["uv"]
     f_room = floor_mesh["f"]
+    v_floor = v_floor - 0.5 * (np.min(v_floor,axis=0) + np.max(v_floor,axis=0))
     for k in range(augment % 4):
-      v_floor = np.stack([v_floor[:,2],v_floor[:,1],-v_floor[:,0]],axis=1)
+      v_floor = np.stack([-v_floor[:,2],v_floor[:,1],v_floor[:,0]],axis=1)
     if augment > 3:
       v_floor[:,0] = -v_floor[:,0]
+      for k in range(augment-3):
+        v_floor = np.stack([-v_floor[:,2],v_floor[:,1],v_floor[:,0]],axis=1)
 
     v_tri = v_floor[f_room[0,:3],:]
     e0 = v_tri[2,:] - v_tri[0,:]

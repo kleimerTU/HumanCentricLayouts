@@ -9,6 +9,7 @@ except ImportError:
 
 from src import utils
 from src.main_functions import *
+from src.evaluation import *
 
 def main(argv):
     parser = argparse.ArgumentParser(
@@ -75,7 +76,7 @@ def main(argv):
         path_input_data = config["paths"]["path_input_data"] + "/"
         path_output_data = config["paths"]["path_output_data"] + "/sequence/"
         path_trained_models = config["paths"]["path_trained_models"] + "/"
-        n_versions = config["network"]["epochs"]
+        n_versions = 10
         model_names = [config["network"]["model_name"]]
         legend_names.append(config["network"]["model_name"])
         use_alt_loss = config["network"]["use_alt_loss"]

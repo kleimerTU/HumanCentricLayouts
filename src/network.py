@@ -1,12 +1,15 @@
 import pickle
 import time
 import torch
+from torch import nn
 from torch.utils.data import Dataset, DataLoader
+from torchvision import models
 import transformers
 
 from src import utils
 from src.modeling_gpt2_custom import GPT2LMHeadModelCustom
 from src.main_functions import *
+from src.evaluation import *
 
 class CustomDataset(Dataset):
   """
@@ -213,7 +216,7 @@ class RoomEncoder(nn.Module):
   def forward(self, X):
       return self.fc_room(self.extractor(X))
 
-def train(dataloader, model, optimizer_, scheduler_, device_, dict_int2cat, minvalue_dict, maxvalue_dict, res, max_furniture, dict_cat2fun, use_ergo=False, use_weight=False, eval_ergo_loss=False, order_switch=0, use_log=True, alt_loss=False, room_encoder=None, room_mode='replace_angle_after',pred_sigma=8.0, pred_random=False):
+def train(dataloader, model, optimizer_, scheduler_, device_, dict_int2cat, minvalue_dict, maxvalue_dict, res, max_furniture, dict_cat2fun, use_ergo=False, use_weight=False, eval_ergo_loss=False, order_switch=0, use_log=True, alt_loss=False, room_encoder=None, room_mode='replace_all_after',pred_sigma=1.0, pred_random=False):
   """
   Function that trains the Transformer for one epoch
   """
@@ -372,9 +375,9 @@ def train(dataloader, model, optimizer_, scheduler_, device_, dict_int2cat, minv
     avg_ergo_loss = avg_ergo_loss / nvalid
     avg_epoch_loss_weighted = avg_epoch_loss_weighted / nvalid
     avg_ergo_loss_weighted = avg_ergo_loss_weighted / nvalid
-  return avg_epoch_loss, avg_ergo_loss, avg_epoch_loss_weighted, avg_ergo_loss_weighted
+  return avg_epoch_loss, avg_ergo_loss, avg_epoch_loss_weighted, avg_ergo_loss_weighted, batch_loss_hist, batch_ergo_loss_hist
 
-def validate(dataloader, model, device_, dict_int2cat, minvalue_dict, maxvalue_dict, res, max_furniture, dict_cat2fun, use_ergo=False, eval_ergo_loss=False, order_switch=0, use_log=True, alt_loss=False, room_encoder=None, room_mode='replace_angle_after', pred_sigma=8.0, pred_random=False):
+def validate(dataloader, model, device_, dict_int2cat, minvalue_dict, maxvalue_dict, res, max_furniture, dict_cat2fun, use_ergo=False, eval_ergo_loss=False, order_switch=0, use_log=True, alt_loss=False, room_encoder=None, room_mode='replace_all_after', pred_sigma=1.0, pred_random=False):
   """
   Function that performs validation for the given Transformer model
   """
@@ -579,7 +582,7 @@ def training_loop(training_params):
   room_encoder = None
   room_masks_train = []
   room_masks_val = []
-  room_mode = "replace_angle_after"
+  room_mode = "replace_all_after"
   room_fs = 64
   if "use_room_masks" in training_params.keys() and training_params["use_room_masks"]:
     if "room_mode" in training_params.keys() and training_params["room_mode"]:

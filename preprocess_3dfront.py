@@ -391,7 +391,7 @@ def main(argv):
             bb_sorted, _ = torch.sort(bb,descending=True) # order of bb dimensions is not always correct
             furn_bbox = [bb_sorted[0],2.0,bb_sorted[1]]
           else:
-            furn_bbox = [0.75,2.0,0.05]
+            furn_bbox = [0.75,2.0,0.2]
           furn_scale = [1.0,1.0,1.0]
           new_furn.dim = torch.as_tensor(furn_bbox,device=device)[[0,2]] * torch.as_tensor(furn_scale,device=device)[[0,2]]
           rot = furn["rot"]
