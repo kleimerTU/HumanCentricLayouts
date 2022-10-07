@@ -24,8 +24,8 @@ def main(argv):
     args = parser.parse_args(argv)
     config_paths = args.path_to_config
     n_models = len(config_paths)
-    for i in range(n_models):
-      with open(args.path_to_config[i], "r") as f:
+    for model in range(n_models):
+      with open(args.path_to_config[model], "r") as f:
         config = yaml.load(f, Loader=Loader)
     
       training_params = dict(config["general"], **config["network"])
