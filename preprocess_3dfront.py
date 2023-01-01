@@ -497,6 +497,29 @@ def create_dict_model2bbox(model_path, out_path):
             dict_model2bbox[folders[i]] = bbox.tolist()
             dict_model2minp[folders[i]] = np.min(vertices, axis=0).tolist()
             dict_model2maxp[folders[i]] = np.max(vertices, axis=0).tolist()
+  dict_model2bbox["ts_computer"] = [0.6495,0.5217146300000001,0.359507]
+  dict_model2bbox["ts_tv"] = [0.99,0.7038720022258601,0.0996884]
+  dict_model2bbox["ts_door0"] =  [1.060501,2.11598,0.146625]
+  dict_model2bbox["ts_door1"] =  [2.121602,2.11598,0.146625]
+  dict_model2bbox["ts_window0"] =  [0.84702568,1.1968835549999999,0.22399480500000002]
+  dict_model2bbox["ts_window1"] =  [0.4731994319999999,1.2620006400000001,0.15]
+  dict_model2bbox["ts_window2"] =  [1.961768,0.901153,0.12717]
+  
+  dict_model2minp["ts_computer"] = [-0.32475,-0.00222363,-0.180023]
+  dict_model2minp["ts_tv"] = [-0.495,-2.22586e-09,-0.0498509]
+  dict_model2minp["ts_door0"] =  [-0.530401,0.0,-0.07335]
+  dict_model2minp["ts_door1"] =  [-1.060801,0.0,-0.07335]
+  dict_model2minp["ts_window0"] =  [-0.42351284,-1.2835000000000002e-05,-0.11302127]
+  dict_model2minp["ts_window1"] =  [-0.23659971599999996,0.0,-0.075]
+  dict_model2minp["ts_window2"] =  [-0.980884,0.0,-0.063585]
+  
+  dict_model2maxp["ts_computer"] = [0.32475,0.519491,0.179484]
+  dict_model2maxp["ts_tv"] = [0.495,0.703872,0.0498375]
+  dict_model2maxp["ts_door0"] =  [0.530401,2.11598,0.073275]
+  dict_model2maxp["ts_door1"] =  [1.060801,2.11598,0.073275]
+  dict_model2maxp["ts_window0"] =  [0.42351284,1.19687072,0.11097353500000001]
+  dict_model2maxp["ts_window1"] =  [0.23659971599999996,1.2620006400000001,0.075]
+  dict_model2maxp["ts_window2"] =  [0.980884,0.901153,0.063585]
   print()
   with open(out_path + "model2bbox.json","w") as file:
       json.dump(dict_model2bbox, file, indent=4)
